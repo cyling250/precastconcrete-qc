@@ -8,5 +8,6 @@
   // ============================================================
   // Python
   // ============================================================
-  "python.formatting.provider": "black"
+  "python.formatting.provider": "black",
+  "python.terminal.activateEnvironment": false
 }

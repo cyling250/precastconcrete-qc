@@ -144,3 +144,4 @@ cython_debug/
 *.mtl
 *.rvt
 *.pcd
+*.rfa
