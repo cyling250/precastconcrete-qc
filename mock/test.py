@@ -7,11 +7,12 @@
 @Desc    :   测试脚本，用于测试点云数据处理工具
 """
 
-import open3d as o3d
 import os
 import sys
 
-file_path = "./mock/res/pcd/standard_layer_1000000p.pcd"
+import open3d as o3d
+
+file_path = "C:/Users/35160/Desktop/预制叠合梁300x600.ply"
 
 # 检查文件是否存在
 if not os.path.exists(file_path):
