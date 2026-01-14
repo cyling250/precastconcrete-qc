@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-@File    :   add_noise.py
+@File    :   noise_utils.py
 @Time    :   2025/12/24 22:28:26
 @Author  :   Xiaopeng Gu
 @Version :   1.0
-@Desc    :   向点云添加噪声
+@Desc    :   点云噪声处理工具
 """
 
 import numpy as np
