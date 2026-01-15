@@ -60,8 +60,13 @@ def add_outlier_noise(point_cloud, outlier_ratio=0.1, scale=1.0):
     - scale: 离群点分布范围的缩放因子
     """
     n_points = point_cloud.shape[0]
+    
+    # 处理空点云情况
+    if n_points == 0:
+        return point_cloud.copy()
+    
     n_outliers = int(n_points * outlier_ratio)
-
+    
     # 计算原始点云的边界框
     min_coords = np.min(point_cloud, axis=0)
     max_coords = np.max(point_cloud, axis=0)
