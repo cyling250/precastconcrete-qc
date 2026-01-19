@@ -152,24 +152,3 @@ class EigenMeasures:
             "tortuosity": self.tortuosity,
             "curvature_change": self.curvature_change,
         }
-
-
-# 示例用法
-if __name__ == "__main__":
-    # 从文件路径创建实例
-    eigen_analyzer = EigenMeasures("mock/res/point/预制叠合梁300x600.ply")
-
-    # 直接访问特征值参数
-    print(f"\n直接访问特征值参数:")
-    print(f"线性度: {eigen_analyzer.linearity}")
-    print(f"平面性: {eigen_analyzer.planarity}")
-    print(f"球度: {eigen_analyzer.sphericity}")
-
-    # 打印所有结果
-    print(f"\n打印所有结果:")
-    eigen_analyzer.print_results()
-
-    # 获取所有结果的字典
-    print(f"\n获取所有结果字典:")
-    all_measures = eigen_analyzer.all_measures
-    print(all_measures)

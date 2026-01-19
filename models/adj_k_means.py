@@ -1,8 +1,8 @@
 import numpy as np
-import time
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import pairwise_distances
 from sklearn.preprocessing import normalize
+
 
 class AdjustKMeans:
     """
@@ -46,8 +46,6 @@ class AdjustKMeans:
         返回:
         self: 聚类模型
         """
-        start_time = time.time()
-
         # 应用特征权重
         if self.feature_weights is not None:
             # 确保权重数量与特征数量匹配
@@ -61,7 +59,6 @@ class AdjustKMeans:
 
             # 对特征向量应用权重
             X_weighted = X * weights
-            print(f"已应用特征权重: {self.feature_weights}")
         else:
             X_weighted = X
             weights = None
@@ -116,8 +113,6 @@ class AdjustKMeans:
         else:
             raise ValueError(f"不支持的距离度量方式: {self.distance_metric}")
 
-        end_time = time.time()
-        print(f"聚类完成，耗时: {end_time - start_time:.2f}秒")
         return self
 
     def _custom_kmeans(self, X, weights, distance_metric="manhattan"):
@@ -232,6 +227,19 @@ class AdjustKMeans:
                 distance = np.linalg.norm(point_weighted - centroid_weighted)
             inertia += distance**2
         self.inertia_ = inertia
+
+    def normal(self, X):
+        """
+        对输入的点云特征向量进行归一化
+
+        参数:
+        X: numpy.ndarray, 输入的点云特征向量
+
+        返回:
+        X_normalized: numpy.ndarray, 归一化后的点云特征向量
+        """
+        # TODO 因为有距离的限制，需要对特征向量进行归一化
+        pass
 
     def predict(self, X):
         """

@@ -1,6 +1,6 @@
 # precastconcrete-qc
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Open3D 0.19.0](https://img.shields.io/badge/open3d-0.19.0-orange.svg)](http://www.open3d.org/)
 [![numpy 2.4.0](https://img.shields.io/badge/numpy-2.4.0-green.svg)](https://numpy.org/)
 [![Status](https://img.shields.io/badge/status-development-yellow.svg)]()
@@ -129,7 +129,7 @@ python mock/test.py
 
 ## 技术栈
 
-- **编程语言**：Python 3.12+
+- **编程语言**：Python 3.8+
 - **点云处理**：Open3D
 - **BIM模型**：Revit 2020、IFC格式
 - **点云可视化**：CloudCompare

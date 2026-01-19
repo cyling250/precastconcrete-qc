@@ -33,9 +33,3 @@ def convert_ccxyz_to_xyz(cc_file: str) -> np.ndarray:
     # 将123列转换为Numpy数组
     xyz = df[[0, 1, 2]].to_numpy()
     return xyz
-
-
-if __name__ == "__main__":
-    cc_file = r"C:\Users\35160\Desktop\预制叠合梁300x600.txt"
-    xyz = convert_ccxyz_to_xyz(cc_file)
-    np.savetxt(cc_file.replace(".txt", "_xyz.txt"), xyz, fmt="%.6f")
