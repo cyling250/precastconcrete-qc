@@ -10,40 +10,7 @@
 import numpy as np
 import open3d as o3d
 from models.adj_k_means import AdjustKMeans
-
-
-def create_feature_vector(features_npy_file: str):
-    """
-    创建点云特征向量，将空间坐标和局部几何特征组合
-
-    参数:
-    features_npy_file: str, 特征数据npy文件路径
-
-    返回:
-    feature_vectors: numpy.ndarray, 形状为 (n_points, n_features)，点云特征向量
-    feature_names: list, 特征名称列表
-    """
-
-    # 从npy文件加载特征数据
-    features_dict = np.load(features_npy_file, allow_pickle=True).item()
-
-    # 获取所有特征名称
-    feature_names = list(features_dict.keys())
-
-    # 创建特征向量
-    feature_vectors_list = []
-
-    # 添加所有特征
-    for feature_name in features_dict.keys():
-        feature_values = features_dict[feature_name]
-        # 确保特征值形状正确
-        feature_values = feature_values.reshape(-1, 1)
-        feature_vectors_list.append(feature_values)
-
-    # 组合所有特征
-    feature_vectors = np.hstack(feature_vectors_list)
-
-    return feature_vectors, feature_names
+from utils.eigen_measures_utils import create_feature_vector
 
 
 def save_clusters(
@@ -74,9 +41,9 @@ def save_clusters(
 
 def clustering(
     point_cloud: o3d.geometry.PointCloud,
-    features_npy_file: str,
-    output_file: str,
+    features_file: str,
     feature_weights: list,
+    output_file: str = None,
     n_clusters=2,  # 2类：钢筋和混凝土
     max_iter=100,
     distance_metric="euclidean",  # 只使用欧氏距离，因为它最适合特征权重
@@ -99,7 +66,7 @@ def clustering(
     """
     # 创建点云特征向量
     feature_vectors, _ = create_feature_vector(
-        features_npy_file,
+        features_file,
     )
 
     # 创建并训练聚类模型
@@ -114,9 +81,11 @@ def clustering(
 
     kmeans.fit(feature_vectors)
     # 保存聚类结果
-    save_clusters(
-        point_cloud,
-        kmeans.labels_,
-        output_file,
-    )
-    print(f"聚类结果已保存到 {output_file}")
+    if output_file:
+        save_clusters(
+            point_cloud,
+            kmeans.labels_,
+            output_file,
+        )
+        print(f"聚类结果已保存到 {output_file}")
+    return kmeans.labels_

@@ -152,3 +152,37 @@ class EigenMeasures:
             "tortuosity": self.tortuosity,
             "curvature_change": self.curvature_change,
         }
+
+
+def create_feature_vector(features_file: str):
+    """
+    创建点云特征向量，将空间坐标和局部几何特征组合
+
+    参数:
+    features_file: str, 特征数据npy文件路径
+
+    返回:
+    feature_vectors: numpy.ndarray, 形状为 (n_points, n_features)，点云特征向量
+    feature_names: list, 特征名称列表
+    """
+
+    # 从npy文件加载特征数据
+    features_dict = np.load(features_file, allow_pickle=True).item()
+
+    # 获取所有特征名称
+    feature_names = list(features_dict.keys())
+
+    # 创建特征向量
+    feature_vectors_list = []
+
+    # 添加所有特征
+    for feature_name in features_dict.keys():
+        feature_values = features_dict[feature_name]
+        # 确保特征值形状正确
+        feature_values = feature_values.reshape(-1, 1)
+        feature_vectors_list.append(feature_values)
+
+    # 组合所有特征
+    feature_vectors = np.hstack(feature_vectors_list)
+
+    return feature_vectors, feature_names
