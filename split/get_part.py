@@ -3,20 +3,20 @@ import numpy as np
 from utils.eigen_measures_utils import create_feature_vector
 
 
-def get_concrete_part(point_cloud, labels, NEIGHBOR_FEATURES):
+def get_concrete_part(point_cloud, labels, neighbor_features):
     """
-    从点云数据中提取混凝土部分。
+    从已经聚类好的点云数据中提取混凝土部分。
 
     参数:
     point_cloud (numpy.ndarray): 原始点云数据，形状为 (N, 3)，其中 N 是点的数量。
     labels (numpy.ndarray): 点云数据的聚类标签，形状为 (N,)。
-    NEIGHBOR_FEATURES (str): 邻域特征文件的路径。
+    neighbor_features (str): 邻域特征文件的路径。
 
     返回:
     numpy.ndarray: 混凝土部分的点云数据，形状为 (M, 3)，其中 M 是混凝土点的数量。
     """
     # 读取邻域特征
-    feature_vectors, feature_names = create_feature_vector(NEIGHBOR_FEATURES)
+    feature_vectors, feature_names = create_feature_vector(neighbor_features)
     planarity = feature_vectors[:, feature_names.index("planarity")]
     # 计算不同类别的邻域特征的平均值
     unique_labels = np.unique(labels)
@@ -34,20 +34,21 @@ def get_concrete_part(point_cloud, labels, NEIGHBOR_FEATURES):
     concrete_pcd.points = o3d.utility.Vector3dVector(concrete_pcd_array)
     return concrete_pcd
 
-def get_rebar_part(point_cloud, labels, NEIGHBOR_FEATURES):
+
+def get_rebar_part(point_cloud, labels, neighbor_features):
     """
-    从点云数据中提取钢筋部分。
+    从已经聚类好的点云数据中提取钢筋部分。
 
     参数:
     point_cloud (numpy.ndarray): 原始点云数据，形状为 (N, 3)，其中 N 是点的数量。
     labels (numpy.ndarray): 点云数据的聚类标签，形状为 (N,)。
-    NEIGHBOR_FEATURES (str): 邻域特征文件的路径。
+    neighbor_features (str): 邻域特征文件的路径。
 
     返回:
     numpy.ndarray: 钢筋部分的点云数据，形状为 (M, 3)，其中 M 是钢筋点的数量。
     """
     # 读取邻域特征
-    feature_vectors, feature_names = create_feature_vector(NEIGHBOR_FEATURES)
+    feature_vectors, feature_names = create_feature_vector(neighbor_features)
     planarity = feature_vectors[:, feature_names.index("planarity")]
     # 计算不同类别的邻域特征的平均值
     unique_labels = np.unique(labels)
