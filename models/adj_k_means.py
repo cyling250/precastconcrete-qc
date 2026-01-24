@@ -238,7 +238,7 @@ class AdjustKMeans:
         返回:
         X_normalized: numpy.ndarray, 归一化后的点云特征向量
         """
-        # TODO 因为有距离的限制，需要对特征向量进行归一化
+        # TODO 因为有距离的限制，需要对特征向量进行归一化，否则会出现xyz这类特征值很大的点，导致距离计算错误
         pass
 
     def predict(self, X):

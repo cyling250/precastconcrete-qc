@@ -20,7 +20,6 @@ class PlaneModel(object):
         return ind
 
     def estimate_parameters(self, pts):
-        # 最小二乘法估算平面模型
         # 只有三个点时，可以直接计算
         num = pts.shape[0]
         if num == 3:
@@ -29,7 +28,6 @@ class PlaneModel(object):
             l2 = pts[2] - pts[0]
             n = np.cross(l1, l2)
             scale = [n[i] ** 2 for i in range(n.shape[0])]
-            # print(scale)
             n = n / np.sqrt(np.sum(scale))
         else:
             _, _, c, n = SVD(pts)
@@ -50,6 +48,7 @@ class RansacPlaneFitter:
     threshold: float, 内点距离阈值，默认0.01
     iterations: int, RANSAC迭代次数，默认100
     min_inliers: int, 最小内点数量，默认10
+    max_n_points: int, 最大点数量，默认100
     max_plane_num: int, 最大平面数量，默认1
     random_state: int, 随机种子，默认None
     """
@@ -59,6 +58,7 @@ class RansacPlaneFitter:
         threshold: float = 0.001,
         iterations: int = 1000,
         min_inliers: int = 10,
+        max_n_points: int = 4,
         max_plane_num: int = 20,
         random_state: Optional[int] = None,
     ):
@@ -68,6 +68,7 @@ class RansacPlaneFitter:
         self._threshold = threshold
         self._iterations = iterations
         self._min_inliers = min_inliers
+        self._max_n_points = max_n_points
         self._max_plane_num = max_plane_num
         self._random_state = random_state
 
@@ -78,7 +79,6 @@ class RansacPlaneFitter:
         self._inliers: Optional[List[np.ndarray]] = []  # 内点坐标列表
         self._outliers: Optional[np.ndarray] = None  # 外点坐标
         self._n_inliers: Optional[List[int]] = []  # 内点数量
-        self._fitting_time: Optional[float] = 0.0  # 拟合耗时
 
         # 设置随机种子
         if random_state is not None:
@@ -107,7 +107,7 @@ class RansacPlaneFitter:
                     f"第{n_iter}次迭代，剩余外点数量不足{self._min_inliers}个，停止迭代"
                 )
                 break
-        pass
+        return
 
     def _fit_one(self, pcd_data: np.ndarray):
         """
@@ -138,10 +138,10 @@ class RansacPlaneFitter:
         self._outliers = pcd_data[~inlier_mask]
 
         # 计算拟合时间
-        self._fitting_time = time.time() - start_time
+        fitting_time = time.time() - start_time
 
         print(
-            f"第{len(self._plane_equation)}个平面拟合完成，耗时: {self._fitting_time:.4f}秒"
+            f"第{len(self._plane_equation)}个平面拟合完成，耗时: {fitting_time:.4f}秒"
         )
         print(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
 
@@ -194,8 +194,9 @@ class RansacPlaneFitter:
         # 使用tqdm显示RANSAC迭代进度
         with tqdm(total=self._iterations, desc="RANSAC平面拟合", unit="iter") as pbar:
             for i in range(self._iterations):
-                # 随机选择3个点
-                sample_index = random.sample(range(n_points), 3)
+                # 随机选择n个点
+                point_num = np.random.randint(3, self._max_n_points)
+                sample_index = np.random.choice(n_points, point_num, replace=False)
                 sample_points = pcd_data[sample_index, :]
 
                 # 使用PlaneModel类进行平面拟合

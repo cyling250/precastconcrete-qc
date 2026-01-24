@@ -12,6 +12,7 @@ import numpy as np
 from scipy.spatial import KDTree
 from utils.eigen_measures_utils import EigenMeasures
 from tqdm import tqdm
+import open3d as o3d
 
 DEFAULT_NEIGHBOR_FEATURES = [
     "linearity",
@@ -30,6 +31,7 @@ def neighbor_features(
     output_file: str,
     distance: float,
     feature_names=DEFAULT_NEIGHBOR_FEATURES,
+    is_visualize: bool = False,
 ):
     """
     计算点云中每个点在不同距离邻域内的特征
@@ -74,8 +76,26 @@ def neighbor_features(
         features["Z"][i] = point_cloud[i, 2]
         for name in feature_names:
             features[name][i] = getattr(eigen_measures, name)
+    if is_visualize:
+        visualize_features(point_cloud, features, feature_names)
     # 保存所有特征到单个npy文件
     save_features(features, output_file)
+
+
+def visualize_features(point_cloud, features, feature_names):
+    # DEBUG 可视化邻域特征
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(point_cloud)
+    for name in feature_names:
+        # 归一化特征值到[0, 1]范围
+        features[name] = (features[name] - np.min(features[name])) / (
+            np.max(features[name]) - np.min(features[name])
+        )
+        # 转换为RGB颜色（0-1范围）
+        colors = np.zeros_like(point_cloud)
+        colors[:, 0] = features[name]
+        pcd.colors = o3d.utility.Vector3dVector(colors)
+        o3d.visualization.draw_geometries([pcd])
 
 
 def save_features(features_dict: dict, output_file: str):
