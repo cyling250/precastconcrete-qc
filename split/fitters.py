@@ -190,3 +190,51 @@ def visualize_line_fitter(line_fitter):
 
     # 可视化点云和直线
     o3d.visualization.draw_geometries(inliers_pcd_list + [outliers_pcd] + line_list)
+
+
+def close_rebar(line_fitter):
+    """给钢筋封口
+    Args:
+        line_fitter (RansacLineFitter): RANSAC直线拟合器
+    Returns:
+        list[np.ndarray]: 封口点云列表
+    """
+    all_point = []
+    line_equation_list = line_fitter.get_line_equation()
+    inliers_list = line_fitter.get_inliers()
+    for i in range(len(inliers_list)):
+        current_inliers = inliers_list[i]
+        if len(current_inliers) == 0:
+            continue
+
+        line_eq = line_equation_list[i]
+        cx, cy, cz, nx, ny, nz = line_eq
+        direction = np.array([nx, ny, nz])
+
+        # 计算内点在直线方向上的投影坐标
+        inlier_centered = current_inliers - np.array([cx, cy, cz])
+        projections = np.dot(inlier_centered, direction)
+        min_proj = np.min(projections)
+        max_proj = np.max(projections)
+
+        # 找到两个最远点（封头位置）
+        min_point = np.array([cx, cy, cz]) + min_proj * direction
+        max_point = np.array([cx, cy, cz]) + max_proj * direction
+
+        # 构造两个封头平面（法向量为直线方向向量）
+        # 平面1：通过min_point，法向量为direction
+        # 平面2：通过max_point，法向量为direction
+
+        # 将内点向两个平面投影
+        # 投影到min_point平面
+        projections_min = np.dot(current_inliers - min_point, direction)
+        cap_points_min = current_inliers - projections_min[:, np.newaxis] * direction
+
+        # 投影到max_point平面
+        projections_max = np.dot(current_inliers - max_point, direction)
+        cap_points_max = current_inliers - projections_max[:, np.newaxis] * direction
+
+        # 将封头点云添加到结果中
+        all_point.append(cap_points_min)
+        all_point.append(cap_points_max)
+    return all_point
