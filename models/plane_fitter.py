@@ -90,7 +90,11 @@ class RansacPlaneFitter:
         # 初始化拟合参数
         n_iter = 0
         while True:
-            self._fit_one(self._outliers)  # 拟合平面
+            try:
+                self._fit_one(self._outliers)  # 拟合平面
+            except ValueError as e:
+                print(e)
+                break
             # ============停止策略============
             # 1. 找到的平面大于设定的最大平面
             # 2. 剩余内点数量不支持下一次迭代
@@ -232,7 +236,7 @@ class RansacPlaneFitter:
 
         # 检查是否找到足够的内点
         if len(best_inliers) < self._min_inliers:
-            print(
+            raise ValueError(
                 f"警告：只找到 {len(best_inliers)} 个内点，少于最小要求 {self._min_inliers}"
             )
 
@@ -263,7 +267,7 @@ class RansacPlaneFitter:
         return np.abs(distances)
 
     def get_inliers(self) -> List[np.ndarray]:
-        """获取内点索引"""
+        """获取内点坐标"""
         if self._inliers is None:
             raise ValueError("请先调用fit方法进行平面拟合")
         return self._inliers
