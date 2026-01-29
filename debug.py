@@ -17,8 +17,8 @@ if __name__ == "__main__":
         0.5,  # X坐标
         0.5,  # Y坐标
         0.5,  # Z坐标
-        6.0,  # linearity（线性度）
-        6.0,  # planarity（平面度）
+        1.0,  # linearity（线性度）
+        1.0,  # planarity（平面度）
         1.0,  # sphericity（球度）
         1.0,  # omnivariance（各向同性）
         1.0,  # anisotropy（各向异性）
@@ -37,8 +37,8 @@ if __name__ == "__main__":
     neighbor_features(
         point_data_np,
         NEIGHBOR_FEATURES,
-        distance=40,
-        is_visualize=False,
+        distance=200,
+        is_visualize=True,
     )
     # 3 点云聚类
     print("聚类中...")
@@ -48,11 +48,11 @@ if __name__ == "__main__":
         output_file="output/cluster.ply",
         feature_weights=FEATURE_WEIGHTS,
     )
-    # # DEBUG 聚类结果可视化
-    # plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
-    # rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
-    # o3d.visualization.draw_geometries([plane_pcd])
-    # o3d.visualization.draw_geometries([rebar_pcd])
+    # DEBUG 聚类结果可视化
+    plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
+    rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
+    o3d.visualization.draw_geometries([plane_pcd])
+    o3d.visualization.draw_geometries([rebar_pcd])
     # 4 混凝土与钢筋拟合
     plane_fitter = concrete_fit(
         point_data_np,

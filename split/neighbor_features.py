@@ -58,7 +58,11 @@ def neighbor_features(
         "Z": np.zeros(point_cloud.shape[0]),
     }
     features.update({name: np.zeros(point_cloud.shape[0]) for name in feature_names})
-
+    # 为计算XYZ准备参数
+    centroid = np.mean(point_cloud, axis=0)
+    point_cloud_c = point_cloud - centroid
+    m = np.max(np.sqrt(np.sum(point_cloud_c**2, axis=1)))
+    point_cloud_c = point_cloud_c / m
     # 对于每个点，计算其邻域特征
     for i in tqdm(range(point_cloud.shape[0]), desc=f"计算距离 {distance}mm 邻域特征"):
         # 找到邻域内的点
@@ -71,9 +75,9 @@ def neighbor_features(
         # 计算特征
         eigen_measures = EigenMeasures(neighborhood)
         # 保存特征
-        features["X"][i] = point_cloud[i, 0]
-        features["Y"][i] = point_cloud[i, 1]
-        features["Z"][i] = point_cloud[i, 2]
+        features["X"][i] = point_cloud_c[i, 0]
+        features["Y"][i] = point_cloud_c[i, 1]
+        features["Z"][i] = point_cloud_c[i, 2]
         for name in feature_names:
             features[name][i] = getattr(eigen_measures, name)
     if is_visualize:
