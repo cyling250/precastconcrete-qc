@@ -8,9 +8,10 @@
 """
 
 import numpy as np
+import open3d as o3d
 
 
-def add_gaussian_noise(point_cloud, mean=0, std=0.01):
+def add_gaussian_noise(point_cloud, mean=0, std=0.005):
     """
     向点云每个点的坐标添加随机高斯分布的偏移量。
     特点：简单高效，适用于模拟激光雷达等传感器的随机误差。
@@ -20,9 +21,12 @@ def add_gaussian_noise(point_cloud, mean=0, std=0.01):
     - mean: 高斯分布均值
     - std: 高斯分布标准差，控制噪声强度
     """
-    noise = np.random.normal(mean, std, size=point_cloud.shape)
-    noisy_cloud = point_cloud + noise
-    return noisy_cloud
+    # 生成与点云相同形状的随机噪声
+    point_cloud_np = np.asarray(point_cloud.points)
+    noise = np.random.normal(mean, std, size=point_cloud_np.shape)
+    # 向点云坐标添加噪声
+    point_cloud.points = o3d.utility.Vector3dVector(point_cloud_np + noise)
+    return point_cloud
 
 
 def add_salt_pepper_noise(point_cloud, noise_ratio=0.05, salt_ratio=0.5):

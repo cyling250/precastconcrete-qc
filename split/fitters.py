@@ -16,6 +16,7 @@ def concrete_fit(
     max_plane_num: int = 20,
     random_state: Optional[int] = None,
     concrete_pcd: Optional[np.ndarray] = None,
+    debug: bool = False,
 ):
     """拟合混凝土点云
     Args:
@@ -59,6 +60,7 @@ def rebar_fit(
     max_n_points: int = 10,
     random_state: int = 42,
     linearity_threshold: float = 0.6,
+    debug: bool = False,
 ) -> list[RansacLineFitter]:
     """拟合钢筋点云
     Args:
@@ -86,9 +88,14 @@ def rebar_fit(
         # 计算当前平面与所有点的距离, 筛选出距离小于阈值的点
         plane_model = PlaneModel()
         plane_model.parameters = concrete_plane_equ[i]
-        inliners_mask = plane_model.calc_inliers(rebars_points, 0.005)
+        inliners_mask = plane_model.calc_inliers(rebars_points, 0.01)
         # 删除距离大于阈值的点
         rebars_points = rebars_points[~inliners_mask]
+    # DEBUG 可视化
+    if debug:
+        rebars_pcd = o3d.geometry.PointCloud()
+        rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
+        o3d.visualization.draw_geometries([rebars_pcd])
     # 3 使用欧式聚类对筛选后的点云进行聚类
     rebars_pcd = o3d.geometry.PointCloud()
     rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)

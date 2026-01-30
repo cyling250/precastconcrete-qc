@@ -1,138 +1,131 @@
-# -*- coding: utf-8 -*-
-"""
-@File    :   main.py
-@Time    :   2026/01/19 11:00:00
-@Author  :   Xiaopeng Gu
-@Version :   1.0
-@Desc    :   项目主入口，支持命令行参数
-"""
-
-import argparse
-import os
-import sys
-import numpy as np
+from split.fitters import visualize_plane_fitter
+from split.fitters import close_rebar
+from utils.format_utils import save_as_xyzc
+from split.k_means import clustering
+from split.neighbor_features import neighbor_features
+from split.fitters import concrete_fit, rebar_fit
+from utils.noise_utils import add_gaussian_noise
 import open3d as o3d
-
-# 导入项目模块
-from split.point_neighborhood_features import (
-    calculate_neighborhood_features,
-    save_features_to_single_file,
-)
-from split.k_means import PointCloudKMeans, create_point_cloud_feature_vector
-from split.ransac_plane_fitting import RANSACPlaneFitting, visualize_results
-
-
-def parse_args():
-    """
-    解析命令行参数
-    """
-    parser = argparse.ArgumentParser(
-        description="地铁车站预制构件加工质量检测系统",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  # 计算点云邻域特征
-  python main.py neighbor-features -i mock/res/point/预制叠合梁300x600.ply -o output/features.npy
-  
-  # 点云聚类
-  python main.py cluster -i mock/res/point/预制叠合梁300x600.ply -f output/features.npy -o output/cluster.ply
-  
-  # 平面拟合
-  python main.py plane-fit -i mock/res/point/预制叠合梁300x600.ply -o output/plane.ply
-        """,
-    )
-
-    # 创建子命令解析器
-    subparsers = parser.add_subparsers(dest="command", help="可用命令")
-
-    # 邻域特征计算命令
-    neighbor_features_parser = subparsers.add_parser(
-        "neighbor-features", help="计算点云邻域特征"
-    )
-    neighbor_features_parser.add_argument(
-        "-i", "--input", required=True, help="输入点云文件路径"
-    )
-    neighbor_features_parser.add_argument(
-        "-o", "--output", required=True, help="输出特征文件路径（.npy格式）"
-    )
-    neighbor_features_parser.add_argument(
-        "-d",
-        "--distance",
-        type=int,
-        nargs="+",
-        default=[50],
-        help="邻域距离列表（单位：mm），默认：50",
-    )
-
-    # 聚类命令
-    cluster_parser = subparsers.add_parser("cluster", help="点云聚类分析")
-    cluster_parser.add_argument("-i", "--input", required=True, help="输入点云文件路径")
-    cluster_parser.add_argument(
-        "-f", "--features", required=True, help="特征文件路径（.npy格式）"
-    )
-    cluster_parser.add_argument(
-        "-o", "--output", required=True, help="输出聚类结果文件路径（.ply格式）"
-    )
-    cluster_parser.add_argument(
-        "-k", "--clusters", type=int, default=2, help="聚类数量，默认：2"
-    )
-    cluster_parser.add_argument(
-        "-m",
-        "--metric",
-        choices=["euclidean", "manhattan", "cosine"],
-        default="euclidean",
-        help="距离度量方式，默认：euclidean",
-    )
-    cluster_parser.add_argument(
-        "-d",
-        "--distance",
-        type=int,
-        default=50,
-        help="特征邻域距离（单位：mm），默认：50",
-    )
-
-    # 平面拟合命令
-    plane_parser = subparsers.add_parser("plane-fit", help="点云平面拟合")
-    plane_parser.add_argument("-i", "--input", required=True, help="输入点云文件路径")
-    plane_parser.add_argument(
-        "-o", "--output", required=True, help="输出拟合结果文件路径（.ply格式）"
-    )
-    plane_parser.add_argument(
-        "-t", "--threshold", type=float, default=0.05, help="距离阈值，默认：0.05"
-    )
-    plane_parser.add_argument(
-        "-c", "--confidence", type=float, default=0.99, help="置信度，默认：0.99"
-    )
-    plane_parser.add_argument(
-        "-m", "--max-iter", type=int, default=5000, help="最大迭代次数，默认：5000"
-    )
-
-    return parser.parse_args()
-
-
-def main():
-    """
-    主函数
-    """
-    # 解析命令行参数
-    args = parse_args()
-
-    if not args.command:
-        print("错误：请指定命令")
-        print("使用 --help 查看可用命令")
-        return
-
-    # 执行相应的命令
-    if args.command == "neighbor-features":
-        run_neighbor_features(args)
-    elif args.command == "cluster":
-        run_cluster(args)
-    elif args.command == "plane-fit":
-        run_plane_fit(args)
-    else:
-        print(f"错误：未知命令 '{args.command}'")
-        print("使用 --help 查看可用命令")
-
+import numpy as np
 
 if __name__ == "__main__":
-    main()
+    TEST_PCD = "mock/res/point/预制柱.ply"
+    NEIGHBOR_FEATURES = "output/neibor_features_40mm.npy"
+    FEATURE_WEIGHTS = [
+        1,  # X坐标
+        1,  # Y坐标
+        1,  # Z坐标
+        3.0,  # linearity（线性度）
+        3.0,  # planarity（平面度）
+        1.0,  # sphericity（球度）
+        1.0,  # omnivariance（各向同性）
+        1.0,  # anisotropy（各向异性）
+        1.0,  # eigenentropy（特征熵）
+        1.0,  # tortuosity（曲折度）
+        1.0,  # curvature_change（曲率变化）
+    ]
+
+    # 1 读取点云文件
+    pcd = o3d.io.read_point_cloud(TEST_PCD)
+    # 添加噪声
+    # pcd = add_gaussian_noise(pcd)
+    # 转换为 numpy 数组
+    point_data_np = np.asarray(pcd.points)
+    # 可视化
+    o3d.visualization.draw_geometries([pcd])
+    # 2 计算邻域特征
+    neighbor_features(
+        point_data_np,
+        NEIGHBOR_FEATURES,
+        distance=40,
+        is_visualize=False,
+    )
+    # 3 点云聚类
+    print("聚类中...")
+    labels = clustering(
+        pcd,
+        NEIGHBOR_FEATURES,
+        output_file="output/cluster.ply",
+        feature_weights=FEATURE_WEIGHTS,
+    )
+    # # DEBUG 聚类结果可视化
+    plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
+    rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
+    o3d.visualization.draw_geometries([plane_pcd])
+    o3d.visualization.draw_geometries([rebar_pcd])
+    # 4 混凝土与钢筋拟合
+    plane_fitter = concrete_fit(
+        point_data_np,
+        labels,
+        NEIGHBOR_FEATURES,
+        threshold=0.01,
+        iterations=2000,
+        min_inliers=100,
+        max_n_points=5,
+        max_plane_num=6,
+        debug=True,
+    )
+    visualize_plane_fitter(plane_fitter)
+    # 5 钢筋拟合
+    line_fitters = rebar_fit(
+        point_data_np,
+        plane_fitter,
+        labels,
+        NEIGHBOR_FEATURES,
+        threshold=0.08,
+        iterations=2000,
+        min_inliers=10,
+        max_n_points=10,
+        linearity_threshold=0.6,
+        random_state=42,
+        debug=True,
+    )
+    # 保存数据
+    all_point = plane_fitter.get_inliers()
+    # 为混凝土点云进行体素下采样
+    show_list = []
+    for i in range(len(all_point)):
+        pcd_temp = o3d.geometry.PointCloud()
+        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
+
+        # 点云的体积选取合适的体素大小，当点云数量少于500个时，不进行下采样
+        if len(all_point[i]) > 500:
+            pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.03)
+            all_point[i] = np.asarray(pcd_temp.points)
+
+        # 离群点删除
+        cl, ind = pcd_temp.remove_radius_outlier(nb_points=1, radius=0.04)
+        pcd_temp.points = o3d.utility.Vector3dVector(np.asarray(pcd_temp.points)[ind])
+        # 为每个点云生成不同的随机颜色
+        random_color = np.random.rand(3)  # 生成随机RGB颜色
+        current_points = np.asarray(pcd_temp.points)
+        pcd_temp.colors = o3d.utility.Vector3dVector(
+            np.tile(random_color, (len(current_points), 1))
+        )
+        show_list.append(pcd_temp)
+    # 可视化下采样后的点云
+    o3d.visualization.draw_geometries(show_list)
+    save_as_xyzc(all_point, "output/concrete_inliers.xyzc")
+
+    for line_fitter in line_fitters:
+        inliers_list = line_fitter.get_inliers()
+        # # 给钢筋封口
+        # cap_points = close_rebar(line_fitter)
+        # # 添加封口点
+        # all_point.extend(cap_points)
+        # 添加原始内点
+        all_point.append([i for inliers in inliers_list for i in inliers])
+    save_as_xyzc(all_point, "output/all_inliers.xyzc")
+    show_list = []
+    for i in range(len(all_point)):
+        pcd_temp = o3d.geometry.PointCloud()
+        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
+        # 为每个点云生成不同的随机颜色
+        random_color = np.random.rand(3)  # 生成随机RGB颜色
+        current_points = np.asarray(pcd_temp.points)
+        pcd_temp.colors = o3d.utility.Vector3dVector(
+            np.tile(random_color, (len(current_points), 1))
+        )
+        show_list.append(pcd_temp)
+    # 可视化下采样后的点云
+    o3d.visualization.draw_geometries(show_list)
