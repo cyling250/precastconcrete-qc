@@ -1,9 +1,8 @@
-from split.fitters import visualize_plane_fitter
-from split.fitters import close_rebar
+from fit.fitters import visualize_plane_fitter
 from utils.format_utils import save_as_xyzc
-from split.k_means import clustering
-from split.neighbor_features import neighbor_features
-from split.fitters import concrete_fit, rebar_fit
+from fit.k_means import clustering
+from fit.neighbor_features import neighbor_features
+from fit.fitters import concrete_fit, rebar_fit
 from utils.noise_utils import add_gaussian_noise
 import open3d as o3d
 import numpy as np
@@ -28,8 +27,8 @@ def visualize_line_fitter(all_point: list):
 
 
 if __name__ == "__main__":
-    # PCD_NAME = "prefabricated_laminated_beam"
-    PCD_NAME = "prefabricated_column"
+    PCD_NAME = "prefabricated_laminated_beam"
+    # PCD_NAME = "prefabricated_column"
     NEIBOR_DISTANCE = 40
     FEATURE_WEIGHTS = [
         1,  # X坐标
@@ -85,7 +84,7 @@ if __name__ == "__main__":
         iterations=2000,
         min_inliers=10,
         max_n_points=5,
-        max_plane_num=6,
+        max_plane_num=20,
         debug=True,
     )
     visualize_plane_fitter(plane_fitter)
@@ -95,11 +94,11 @@ if __name__ == "__main__":
         plane_fitter,
         labels,
         NEIGHBOR_FEATURES,
-        threshold=0.04,
+        threshold=0.01,
         iterations=2000,
         min_inliers=10,
         max_n_points=10,
-        linearity_threshold=0.6,
+        linearity_threshold=0.1,
         random_state=42,
         debug=True,
     )

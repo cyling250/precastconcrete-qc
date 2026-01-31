@@ -1,102 +1,9 @@
 import time
-from typing import Optional
 from typing import List
 import numpy as np
 from tqdm import tqdm
-from utils.math_utils import SVD
-from utils.eigen_measures_utils import EigenMeasures
 import open3d as o3d
-
-
-class LineModel(object):
-    def __init__(self):
-        # 线段参数（线段上任意一点 cx, cy, cx） + （线段方向向量 nx, ny, nz）
-        self.parameters = None
-
-    def calc_inliers(self, points, dst_threshold):
-        """
-        根据点到直线的距离计算内点和外点
-
-        参数:
-            points: numpy.ndarray, 形状为 (n_points, 3)，三维点云坐标
-            dst_threshold: float, 距离阈值，小于该阈值的点被认为是内点
-
-        返回:
-            numpy.ndarray, 形状为 (n_points,)的布尔数组，True表示内点，False表示外点
-        """
-        # 根据点到线的距离计算内点和外点
-        c = self.parameters[0:3]  # 直线上的一点
-        n = self.parameters[3:6]  # 直线的方向向量（已归一化）
-
-        # 计算点到直线的距离
-        # 距离公式: |(p - c) × n| / |n| 由于n已经归一化，所以分母为1
-        dst = np.linalg.norm(np.cross(points - c, n), axis=1)
-        ind = dst < dst_threshold
-        return ind
-
-    def estimate_parameters(self, pts, control_line=None):
-        """
-        估算直线模型参数
-
-        参数:
-            pts: numpy.ndarray, 形状为 (n_points, 3)，用于拟合直线的点集
-            control_line: 可选参数，当提供控制直线时，所得到的拟合直线一定与该直线相交形状为 (6,)的数组，包含控制直线参数 [cx, cy, cz, nx, ny, nz]
-            - 前3个参数: 控制直线上的一点坐标
-            - 后3个参数: 控制直线的方向向量（已归一化）
-
-        返回:
-            numpy.ndarray, 形状为 (6,)的数组，包含直线参数 [cx, cy, cz, nx, ny, nz]
-            - 前3个参数: 直线上的一点坐标
-            - 后3个参数: 直线的方向向量（已归一化）
-        """
-        # 最小二乘法估算直线模型
-        # 只有两个点时，可以直接计算
-        num = pts.shape[0]
-        if num == 2:
-            # 两点确定一条直线
-            c = np.mean(pts, axis=0)  # 直线的中点
-            n = pts[1] - pts[0]  # 直线的方向向量
-            # 归一化方向向量
-            n = n / np.linalg.norm(n)
-        else:
-            # 使用SVD方法拟合直线
-            # 对于直线拟合，我们需要找到点云的主方向
-            u, _, c, _ = SVD(pts)
-            # 主方向是最大特征值对应的特征向量
-            n = u[:, 0]
-            # 确保方向向量归一化
-            n = n / np.linalg.norm(n)
-
-        # 如果提供了控制直线，确保拟合直线与控制直线共面
-        if control_line is not None:
-            # 获取控制直线的参数
-            c_control = control_line[0:3]  # 控制直线上的一点
-            n_control = control_line[3:6]  # 控制直线的方向向量（已归一化）
-
-            # 计算共面平面的法向量：两个方向向量的叉积
-            plane_normal = np.cross(n, n_control)
-
-            # 如果两个向量平行（叉积接近零），则直接返回
-            if np.linalg.norm(plane_normal) < 1e-10:
-                params = np.hstack((c.reshape(1, -1), n.reshape(1, -1)))[0, :]
-                self.parameters = params
-                return params
-            else:
-                # 归一化共面平面法向量
-                plane_normal = plane_normal / np.linalg.norm(plane_normal)
-
-            # 将点c向共面平面投影
-            # 平面方程: (x - c_control) · plane_normal = 0
-            # 投影公式: c_projected = c - [(c - c_control) · plane_normal] * plane_normal
-            projection_vector = np.dot(c - c_control, plane_normal) * plane_normal
-            c_projected = c - projection_vector
-
-            # 使用投影后的点作为新的直线点
-            c = c_projected
-
-        params = np.hstack((c.reshape(1, -1), n.reshape(1, -1)))[0, :]
-        self.parameters = params
-        return params
+from .line_model import LineModel
 
 
 class RansacLineFitter:
@@ -131,12 +38,11 @@ class RansacLineFitter:
         self._linearity_threshold = linearity_threshold
 
         # 拟合结果
-        self._line_equation: Optional[
-            np.ndarray
-        ] = []  # 直线方程参数 [cx, cy, cz, nx, ny, nz]
-        self._inliers: Optional[List[np.ndarray]] = []  # 内点坐标列表
-        self._n_inliers: Optional[List[int]] = []  # 内点数量
-        self._outliers: Optional[np.ndarray] = None  # 外点坐标
+        # 直线方程参数 [cx, cy, cz, nx, ny, nz]
+        self._line_equation: List[np.ndarray] = []
+        self._inliers: List[np.ndarray] = []  # 内点坐标列表
+        self._n_inliers: List[int] = []  # 内点数量
+        self._outliers: np.ndarray | None = None  # 外点坐标
 
         # 设置随机种子
         np.random.seed(random_state)
@@ -163,7 +69,8 @@ class RansacLineFitter:
             # ===============================
             n_iter += 1
             if (
-                len(self._line_equation) >= self._max_n_points
+                self._line_equation is not None
+                and len(self._line_equation) >= self._max_n_points
                 or n_iter >= self._iterations
             ):
                 break
@@ -175,7 +82,7 @@ class RansacLineFitter:
         return
 
     def _fit_one(
-        self, pcd_data: np.ndarray, control_lines: Optional[List[np.ndarray]] = None
+        self, pcd_data: np.ndarray, control_lines: List[np.ndarray] | None = None
     ):
         """
         对输入的三维点云进行直线拟合
@@ -233,8 +140,8 @@ class RansacLineFitter:
             raise ValueError("至少需要2个点才能拟合直线")
 
     def _ransac_line(
-        self, pcd_data: np.ndarray, control_lines: Optional[List[np.ndarray]] = None
-    ):
+        self, pcd_data: np.ndarray, control_lines: List[np.ndarray] | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         RANSAC直线检测核心算法
 
@@ -250,7 +157,7 @@ class RansacLineFitter:
 
         # 如果点太少，直接返回
         if n_points < self._min_inliers:
-            return [0, 0, 0, 1, 0, 0], list(range(n_points))
+            return np.array([0, 0, 0, 1, 0, 0]), np.array(list(range(n_points)))
 
         # 初始化最佳结果
         best_inliers_ratio = 0  # 符合拟合模型的数据的比例
@@ -308,44 +215,14 @@ class RansacLineFitter:
                 f"警告：只找到 {len(best_inliers)} 个内点，少于最小要求 {self._min_inliers}"
             )
 
-        return best_equation, best_inliers
+        return np.array(best_equation), np.array(best_inliers)
 
-    def predict(self, pcd_data: np.ndarray) -> np.ndarray:
-        """
-        预测点云中各点到拟合直线的距离
-
-        参数:
-        pcd_data: numpy.ndarray, 形状为 (n_points, 3)，三维点云坐标
-
-        返回:
-        numpy.ndarray, 形状为 (n_points,)，各点到直线的距离
-        """
-        if self._line_equation is None:
-            raise ValueError("请先调用fit方法进行直线拟合")
-
-        self._validate_data(pcd_data)
-
-        # 创建直线模型并设置参数
-        line = LineModel()
-        line.set_parameters(self._line_equation)
-
-        # 计算点到直线的距离
-        distances = np.linalg.norm(
-            np.cross(
-                pcd_data - np.array(self._line_equation[:3]),
-                np.array(self._line_equation[3:]),
-            ),
-            axis=1,
-        )
-
-        return distances
-
-    def get_inliers(self) -> np.ndarray:
+    def get_inliers(self) -> List[np.ndarray]:
         """
         获取内点索引
 
         返回:
-        numpy.ndarray, 内点索引列表
+        List[numpy.ndarray], 内点索引列表
         """
         if self._inliers is None:
             raise ValueError("请先调用fit方法进行直线拟合")

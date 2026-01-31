@@ -1,7 +1,7 @@
 from typing import Optional
 import numpy as np
 from models import RansacPlaneFitter, PlaneModel, RansacLineFitter
-from split.get_part import get_concrete_part, get_rebar_part
+from .get_part import get_concrete_part, get_rebar_part
 import open3d as o3d
 
 
@@ -46,6 +46,29 @@ def concrete_fit(
         random_state=random_state,
     )
     plane_fitter.fit(concrete_pcd)  # 调用RANSAC平面检测函数
+    final_plane_equation = []
+    final_inliers = []
+    # 对混凝土平面进行区分，以免存在多个点云共用一个平面
+    concrete_inliers = plane_fitter.get_inliers()
+    concrete_equation = plane_fitter.get_plane_equation()
+    for i in range(len(concrete_inliers)):
+        pcd_temp = o3d.geometry.PointCloud()
+        pcd_temp.points = o3d.utility.Vector3dVector(concrete_inliers[i])
+        # 可视化当前点云
+        o3d.visualization.draw_geometries([pcd_temp])
+        # 对点云采用基于距离聚类，将点云分为多个子点云
+        labels = pcd_temp.cluster_dbscan(eps=0.05, min_points=10, print_progress=debug)
+        if len(np.unique(labels)) == 1:
+            final_inliers.append(concrete_inliers[i])
+            final_plane_equation.append(concrete_equation[i])
+            continue
+        for cluster_id in np.unique(labels):
+            if cluster_id == -1:
+                continue
+            final_inliers.append(concrete_inliers[i][labels == cluster_id])
+            final_plane_equation.append(concrete_equation[i])
+    plane_fitter.set_inliers(final_inliers)
+    plane_fitter.set_plane_equation(final_plane_equation)
     return plane_fitter
 
 
