@@ -7,9 +7,9 @@ from utils.math_utils import SVD
 
 
 class PlaneModel(object):
-    def __init__(self):
+    def __init__(self, params=None):
         # 平面模型参数（平面上任意一点 cx, cy, cx） + （平面法向量 nx, ny, nz）
-        self.parameters = None
+        self.parameters = params
 
     def calc_inliers(self, points, dst_threshold):
         # 根据点到平面的距离计算内点和外点
@@ -35,6 +35,13 @@ class PlaneModel(object):
         params = np.hstack((c.reshape(1, -1), n.reshape(1, -1)))[0, :]
         self.parameters = params
         return params
+
+    def project_points(self, points):
+        # 将所有点向平面投影
+        c = self.parameters[0:3]
+        n = self.parameters[3:6]
+        proj_points = points - np.dot(points - c, n.reshape(-1, 1)) * n.reshape(1, -1)
+        return proj_points
 
 
 class RansacPlaneFitter:

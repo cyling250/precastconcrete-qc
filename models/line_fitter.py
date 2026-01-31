@@ -367,7 +367,7 @@ class RansacLineFitter:
         获取直线方程参数
 
         返回:
-        list, 直线方程参数 [cx, cy, cz, nx, ny, nz]
+        list, 直线方程参数 [[cx, cy, cz, nx, ny, nz], ...]
         """
         if self._line_equation is None:
             raise ValueError("请先调用fit方法进行直线拟合")

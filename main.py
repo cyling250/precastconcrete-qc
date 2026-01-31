@@ -7,16 +7,36 @@ from split.fitters import concrete_fit, rebar_fit
 from utils.noise_utils import add_gaussian_noise
 import open3d as o3d
 import numpy as np
+import os
+
+
+def visualize_line_fitter(all_point: list):
+    """可视化直线拟合结果"""
+    show_list = []
+    for i in range(len(all_point)):
+        pcd_temp = o3d.geometry.PointCloud()
+        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
+        # 为每个点云生成不同的随机颜色
+        random_color = np.random.rand(3)  # 生成随机RGB颜色
+        current_points = np.asarray(pcd_temp.points)
+        pcd_temp.colors = o3d.utility.Vector3dVector(
+            np.tile(random_color, (len(current_points), 1))
+        )
+        show_list.append(pcd_temp)
+    # 可视化下采样后的点云
+    o3d.visualization.draw_geometries(show_list)
+
 
 if __name__ == "__main__":
-    TEST_PCD = "mock/res/point/预制柱.ply"
-    NEIGHBOR_FEATURES = "output/neibor_features_40mm.npy"
+    # PCD_NAME = "prefabricated_laminated_beam"
+    PCD_NAME = "prefabricated_column"
+    NEIBOR_DISTANCE = 40
     FEATURE_WEIGHTS = [
         1,  # X坐标
         1,  # Y坐标
         1,  # Z坐标
-        3.0,  # linearity（线性度）
-        3.0,  # planarity（平面度）
+        5.0,  # linearity（线性度）
+        5.0,  # planarity（平面度）
         1.0,  # sphericity（球度）
         1.0,  # omnivariance（各向同性）
         1.0,  # anisotropy（各向异性）
@@ -24,7 +44,10 @@ if __name__ == "__main__":
         1.0,  # tortuosity（曲折度）
         1.0,  # curvature_change（曲率变化）
     ]
-
+    if not os.path.exists(f"output/{PCD_NAME}"):
+        os.makedirs(f"output/{PCD_NAME}")
+    TEST_PCD = f"mock/res/point/{PCD_NAME}.ply"
+    NEIGHBOR_FEATURES = f"output/{PCD_NAME}/neibor_features_{NEIBOR_DISTANCE}mm.npy"
     # 1 读取点云文件
     pcd = o3d.io.read_point_cloud(TEST_PCD)
     # 添加噪声
@@ -45,7 +68,7 @@ if __name__ == "__main__":
     labels = clustering(
         pcd,
         NEIGHBOR_FEATURES,
-        output_file="output/cluster.ply",
+        output_file=f"output/{PCD_NAME}/cluster.ply",
         feature_weights=FEATURE_WEIGHTS,
     )
     # # DEBUG 聚类结果可视化
@@ -58,9 +81,9 @@ if __name__ == "__main__":
         point_data_np,
         labels,
         NEIGHBOR_FEATURES,
-        threshold=0.01,
+        threshold=0.001,
         iterations=2000,
-        min_inliers=100,
+        min_inliers=10,
         max_n_points=5,
         max_plane_num=6,
         debug=True,
@@ -72,7 +95,7 @@ if __name__ == "__main__":
         plane_fitter,
         labels,
         NEIGHBOR_FEATURES,
-        threshold=0.08,
+        threshold=0.04,
         iterations=2000,
         min_inliers=10,
         max_n_points=10,
@@ -80,9 +103,9 @@ if __name__ == "__main__":
         random_state=42,
         debug=True,
     )
-    # 保存数据
+    # 6 保存数据
+    # 6.1 为Point2CAD构造数据格式
     all_point = plane_fitter.get_inliers()
-    # 为混凝土点云进行体素下采样
     show_list = []
     for i in range(len(all_point)):
         pcd_temp = o3d.geometry.PointCloud()
@@ -102,30 +125,33 @@ if __name__ == "__main__":
         pcd_temp.colors = o3d.utility.Vector3dVector(
             np.tile(random_color, (len(current_points), 1))
         )
+        # 保存平面点云
+        o3d.io.write_point_cloud(
+            f"output/{PCD_NAME}/concrete_inliers_{i}.ply", pcd_temp
+        )
+        # 保存平面公式
+        plane_params = plane_fitter.get_plane_equation()[i]
+        np.save(f"output/{PCD_NAME}/concrete_plane_params_{i}.npy", plane_params)
         show_list.append(pcd_temp)
+        # 保存平面点云和平面公式
+
     # 可视化下采样后的点云
     o3d.visualization.draw_geometries(show_list)
-    save_as_xyzc(all_point, "output/concrete_inliers.xyzc")
+    save_as_xyzc(all_point, f"output/{PCD_NAME}/concrete_inliers.xyzc")
 
+    # 保存钢筋拟合结果
+    i = 0
     for line_fitter in line_fitters:
+        i += 1
         inliers_list = line_fitter.get_inliers()
-        # # 给钢筋封口
-        # cap_points = close_rebar(line_fitter)
-        # # 添加封口点
-        # all_point.extend(cap_points)
+        # 保存点云数据为ply
+        pcd_temp = o3d.geometry.PointCloud()
+        pcd_temp.points = o3d.utility.Vector3dVector(inliers_list[0])
+        o3d.io.write_point_cloud(f"output/{PCD_NAME}/rebar_inliers_{i}.ply", pcd_temp)
+        # 保存直线公式
+        line_params = line_fitter.get_line_equation()
+        np.save(f"output/{PCD_NAME}/rebar_line_params_{i}.npy", line_params)
         # 添加原始内点
         all_point.append([i for inliers in inliers_list for i in inliers])
-    save_as_xyzc(all_point, "output/all_inliers.xyzc")
-    show_list = []
-    for i in range(len(all_point)):
-        pcd_temp = o3d.geometry.PointCloud()
-        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
-        # 为每个点云生成不同的随机颜色
-        random_color = np.random.rand(3)  # 生成随机RGB颜色
-        current_points = np.asarray(pcd_temp.points)
-        pcd_temp.colors = o3d.utility.Vector3dVector(
-            np.tile(random_color, (len(current_points), 1))
-        )
-        show_list.append(pcd_temp)
-    # 可视化下采样后的点云
-    o3d.visualization.draw_geometries(show_list)
+    # 可视化直线拟合结果
+    visualize_line_fitter(all_point)
