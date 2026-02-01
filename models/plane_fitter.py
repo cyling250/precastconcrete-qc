@@ -3,7 +3,7 @@ import random
 from typing import Tuple, List
 import time
 from tqdm import tqdm
-from .plane_model import PlaneModel
+from .plane_model import BasePlane, estimate_plane
 
 
 class RansacPlaneFitter:
@@ -175,9 +175,8 @@ class RansacPlaneFitter:
                 sample_index = np.random.choice(n_points, point_num, replace=False)
                 sample_points = pcd_data[sample_index, :]
 
-                # 使用PlaneModel类进行平面拟合
-                plane = PlaneModel()
-                plane_params = plane.estimate_parameters(sample_points)
+                # 使用BasePlane类进行平面拟合
+                plane = estimate_plane(sample_points)
 
                 # 计算内点
                 inlier_mask = plane.calc_inliers(pcd_data, self._threshold)
@@ -188,7 +187,7 @@ class RansacPlaneFitter:
                 if inliers_ratio > best_inliers_ratio:
                     best_inliers_ratio = inliers_ratio
                     # 保存plane_model的参数格式 [cx, cy, cz, nx, ny, nz]
-                    best_equation = plane_params.tolist()
+                    # best_equation = plane_params.tolist()
                     best_inliers = idx_candidates.tolist()
 
                     # 更新进度条描述，显示当前最佳内点比例

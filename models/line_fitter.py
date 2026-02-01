@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 from tqdm import tqdm
 import open3d as o3d
-from .line_model import LineModel
+from .line_model import BaseLine, estimate_line
 
 
 class RansacLineFitter:
@@ -172,8 +172,6 @@ class RansacLineFitter:
                 sample_index = np.random.choice(n_points, point_num, replace=False)
                 sample_points = pcd_data[sample_index, :]
 
-                # 使用LineModel类进行直线拟合
-                line = LineModel()
                 # 从所给控制直线中随机选择一条
                 if control_lines is not None:
                     control_line = control_lines[
@@ -181,7 +179,7 @@ class RansacLineFitter:
                     ]
                 else:
                     control_line = None
-                line_params = line.estimate_parameters(sample_points, control_line)
+                line = estimate_line(sample_points, control_line)
 
                 # 计算内点
                 inlier_mask = line.calc_inliers(pcd_data, self._threshold)
@@ -191,7 +189,7 @@ class RansacLineFitter:
                 # 如果当前内点比例大于之前的最佳比例
                 if inliers_ratio > best_inliers_ratio:
                     best_inliers_ratio = inliers_ratio
-                    best_equation = line_params.tolist()
+                    # best_equation = line_params.tolist()
                     best_inliers = idx_candidates.tolist()
 
                     # 更新进度条描述，显示当前最佳内点比例
