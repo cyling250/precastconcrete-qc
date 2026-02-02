@@ -4,13 +4,14 @@ import open3d as o3d
 import numpy as np
 from models.plane_model import BasePlane, intersect_plane
 from models.line_model import intersect_line
+from utils.preprocess_utils import point_cloud_intersect
 
 # 读取文件
 test_name = "prefabricated_laminated_beam"
 # test_name = "prefabricated_column"
 pcds = []
 planes = []
-for i in range(6):
+for i in range(26):
     # 读取点云
     pcd = o3d.io.read_point_cloud(f"output/{test_name}/concrete_inliers_{i}.ply")
     pcds.append(pcd)
@@ -25,19 +26,17 @@ for i in range(6):
 cross_lines: list[CrossLine] = []
 for i in range(len(pcds)):
     for j in range(i + 1, len(pcds)):
+        if not point_cloud_intersect(pcds[i].points, pcds[j].points):
+            print(f"点云{i}与点云{j}无交线")
+            continue
         plane = planes[i]
         # 计算平面的交线
         cross_line = intersect_plane(plane, planes[j])
         if cross_line is None:
-            print(f"平面{i}与平面{j}平行，无交线")
+            print(f"点云{i}与点云{j}无交线")
         else:
-            if cross_line.in_cloud(pcds[i].points) and cross_line.in_cloud(
-                pcds[j].points
-            ):
-                cross_lines.append(cross_line)
-                print(f"平面{i}与平面{j}的交线在点云中")
-            else:
-                print(f"平面{i}与平面{j}的交线不在点云中")
+            print(f"点云{i}与点云{j}的交线为{cross_line.get_parameters()}")
+            cross_lines.append(cross_line)
 
 # 计算所有交线的交点
 cross_points: list[CrossPoint] = []

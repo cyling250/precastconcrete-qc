@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
         # 点云的体积选取合适的体素大小，当点云数量少于500个时，不进行下采样
         if len(all_point[i]) > 500:
-            pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.03)
+            pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.01)
             all_point[i] = np.asarray(pcd_temp.points)
 
         # 离群点删除
