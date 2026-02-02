@@ -14,15 +14,28 @@ class BasePlane(object):
             raise AttributeError("平面模型参数必须是numpy数组")
         else:
             if params.shape[0] == 4:
-                # 转换为cx,cy,cx,nx,ny,nz格式
-                c = (params[0:3] + params[3:6]) / 2
-                n = params[3:6] - params[0:3]
+                # 转换为cx,cy,cz,nx,ny,nz格式
+                # params是标准形式Ax+By+Cz+D=0
+                n = params[0:3]  # 法向量(A,B,C)
+                d = params[3]  # 常数项D
+
+                # 找到平面上的一个点c
+                # 选择x=0,y=0，计算z=(-D)/C（如果C不为0）
+                if abs(n[2]) > 1e-6:
+                    c = np.array([0, 0, -d / n[2]])
+                # 选择x=0,z=0，计算y=(-D)/B（如果B不为0）
+                elif abs(n[1]) > 1e-6:
+                    c = np.array([0, -d / n[1], 0])
+                # 选择y=0,z=0，计算x=(-D)/A（如果A不为0）
+                else:
+                    c = np.array([-d / n[0], 0, 0])
+
                 self._parameters: np.ndarray | None = np.hstack((c, n))
             elif params.shape[0] == 6:
                 self._parameters: np.ndarray | None = params
             else:
                 raise ValueError("平面模型参数必须是4或6维数组")
-        # 法向量归一化
+        # 归一化平面法向量
         self._parameters[3:6] = self._parameters[3:6] / np.linalg.norm(
             self._parameters[3:6]
         )
@@ -72,7 +85,7 @@ class BasePlane(object):
         return hash(self._id)
 
 
-def calc_inliers(
+def calc_inliers_plane(
     plane: BasePlane, points: np.ndarray, dst_threshold: float
 ) -> np.ndarray:
     """根据点到平面的距离计算内点和外点

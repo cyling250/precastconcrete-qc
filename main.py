@@ -1,5 +1,3 @@
-from fit.fitters import visualize_plane_fitter
-from utils.format_utils import save_as_xyzc
 from fit.k_means import clustering
 from fit.neighbor_features import neighbor_features
 from fit.fitters import concrete_fit, rebar_fit
@@ -9,24 +7,8 @@ import numpy as np
 import os
 
 
-def visualize_line_fitter(all_point: list):
-    """可视化直线拟合结果"""
-    show_list = []
-    for i in range(len(all_point)):
-        pcd_temp = o3d.geometry.PointCloud()
-        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
-        # 为每个点云生成不同的随机颜色
-        random_color = np.random.rand(3)  # 生成随机RGB颜色
-        current_points = np.asarray(pcd_temp.points)
-        pcd_temp.colors = o3d.utility.Vector3dVector(
-            np.tile(random_color, (len(current_points), 1))
-        )
-        show_list.append(pcd_temp)
-    # 可视化下采样后的点云
-    o3d.visualization.draw_geometries(show_list)
-
-
 if __name__ == "__main__":
+    debug = False
     PCD_NAME = "prefabricated_laminated_beam"
     # PCD_NAME = "prefabricated_column"
     NEIBOR_DISTANCE = 40
@@ -53,14 +35,15 @@ if __name__ == "__main__":
     # pcd = add_gaussian_noise(pcd)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
-    # 可视化
-    o3d.visualization.draw_geometries([pcd])
+    # DEBUG 可视化
+    if debug:
+        o3d.visualization.draw_geometries([pcd])
     # 2 计算邻域特征
     neighbor_features(
         point_data_np,
         NEIGHBOR_FEATURES,
         distance=40,
-        is_visualize=False,
+        is_visualize=debug,
     )
     # 3 点云聚类
     print("聚类中...")
@@ -70,11 +53,12 @@ if __name__ == "__main__":
         output_file=f"output/{PCD_NAME}/cluster.ply",
         feature_weights=FEATURE_WEIGHTS,
     )
-    # # DEBUG 聚类结果可视化
-    plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
-    rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
-    o3d.visualization.draw_geometries([plane_pcd])
-    o3d.visualization.draw_geometries([rebar_pcd])
+    # DEBUG 聚类结果可视化
+    if debug:
+        plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
+        rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
+        o3d.visualization.draw_geometries([plane_pcd])
+        o3d.visualization.draw_geometries([rebar_pcd])
     # 4 混凝土与钢筋拟合
     plane_fitter = concrete_fit(
         point_data_np,
@@ -83,11 +67,10 @@ if __name__ == "__main__":
         threshold=0.001,
         iterations=2000,
         min_inliers=10,
-        max_n_points=5,
+        max_n_points=4,
         max_plane_num=20,
-        debug=True,
+        debug=debug,
     )
-    visualize_plane_fitter(plane_fitter)
     # 5 钢筋拟合
     line_fitters = rebar_fit(
         point_data_np,
@@ -100,8 +83,9 @@ if __name__ == "__main__":
         max_n_points=10,
         linearity_threshold=0.1,
         random_state=42,
-        debug=True,
+        debug=debug,
     )
+
     # 6 保存数据
     # 6.1 为Point2CAD构造数据格式
     all_point = plane_fitter.get_inliers()
@@ -129,14 +113,12 @@ if __name__ == "__main__":
             f"output/{PCD_NAME}/concrete_inliers_{i}.ply", pcd_temp
         )
         # 保存平面公式
-        plane_params = plane_fitter.get_plane_equation()[i]
+        plane_params = plane_fitter.get_plane()[i].get_parameters()
         np.save(f"output/{PCD_NAME}/concrete_plane_params_{i}.npy", plane_params)
         show_list.append(pcd_temp)
-        # 保存平面点云和平面公式
 
     # 可视化下采样后的点云
     o3d.visualization.draw_geometries(show_list)
-    save_as_xyzc(all_point, f"output/{PCD_NAME}/concrete_inliers.xyzc")
 
     # 保存钢筋拟合结果
     i = 0
@@ -152,5 +134,8 @@ if __name__ == "__main__":
         np.save(f"output/{PCD_NAME}/rebar_line_params_{i}.npy", line_params)
         # 添加原始内点
         all_point.append([i for inliers in inliers_list for i in inliers])
-    # 可视化直线拟合结果
-    visualize_line_fitter(all_point)
+
+# 可视化所有内点
+pcd_temp = o3d.geometry.PointCloud()
+pcd_temp.points = o3d.utility.Vector3dVector(np.concatenate(all_point))
+o3d.visualization.draw_geometries([pcd_temp])

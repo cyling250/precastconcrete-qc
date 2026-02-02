@@ -147,7 +147,7 @@ def SVD(points):
     return u, s, c, normal
 
 
-def calc_inliers(
+def calc_inliers_line(
     line: BaseLine, points: np.ndarray, dst_threshold: float
 ) -> np.ndarray:
     """
@@ -162,8 +162,8 @@ def calc_inliers(
         numpy.ndarray, 形状为 (n_points,)的布尔数组，True表示内点，False表示外点
     """
 
-    c = line.parameters[0:3]  # 直线上的一点
-    n = line.parameters[3:6]  # 直线的方向向量（已归一化）
+    c = line.get_parameters()[0:3]  # 直线上的一点
+    n = line.get_parameters()[3:6]  # 直线的方向向量
 
     # 计算点到直线的距离
     # 距离公式: |(p - c) × n| / |n| 由于n已经归一化，所以分母为1

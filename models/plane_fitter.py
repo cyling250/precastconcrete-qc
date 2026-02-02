@@ -3,7 +3,7 @@ import random
 from typing import Tuple, List
 import time
 from tqdm import tqdm
-from .plane_model import BasePlane, estimate_plane
+from .plane_model import estimate_plane, calc_inliers_plane, BasePlane
 
 
 class RansacPlaneFitter:
@@ -42,7 +42,7 @@ class RansacPlaneFitter:
         self._random_state = random_state
 
         # 拟合结果
-        self._plane_equation: List[np.ndarray] = []  # 平面方程参数 [a, b, c, d]
+        self._plane: List[BasePlane] = []  # 平面方程
         self._inliers: List[np.ndarray] = []  # 内点坐标列表
         self._outliers: np.ndarray | None = None  # 外点坐标
         self._n_inliers: List[int] = []  # 内点数量
@@ -75,8 +75,8 @@ class RansacPlaneFitter:
             # ===============================
             n_iter += 1
             if (
-                self._plane_equation is None
-                or len(self._plane_equation) >= self._max_plane_num
+                self._plane is None
+                or len(self._plane) >= self._max_plane_num
                 or n_iter >= self._iterations
             ):
                 break
@@ -104,10 +104,10 @@ class RansacPlaneFitter:
         self._validate_data(pcd_data)
 
         # 执行RANSAC平面检测
-        best_equation, best_inliers = self._ransac_plane(pcd_data)
+        best_plane, best_inliers = self._ransac_plane(pcd_data)
 
         # 保存拟合结果
-        self._plane_equation.append(best_equation)
+        self._plane.append(best_plane)
         self._inliers.append(pcd_data[best_inliers])  # 直接保存内点坐标
         self._n_inliers.append(len(best_inliers))
         # 更新外点
@@ -118,21 +118,10 @@ class RansacPlaneFitter:
         # 计算拟合时间
         fitting_time = time.time() - start_time
 
-        print(
-            f"第{len(self._plane_equation)}个平面拟合完成，耗时: {fitting_time:.4f}秒"
-        )
+        print(f"第{len(self._plane)}个平面拟合完成，耗时: {fitting_time:.4f}秒")
         print(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
 
-        # 平面参数格式: [cx, cy, cz, nx, ny, nz]
-        cx, cy, cz, nx, ny, nz = best_equation
-        # 计算平面方程的d值: d = - (nx*cx + ny*cy + nz*cz)
-        d = -(nx * cx + ny * cy + nz * cz)
-        print(
-            f"平面方程: {nx:.4f}(x - {cx:.4f}) + {ny:.4f}(y - {cy:.4f}) + {nz:.4f}(z - {cz:.4f}) = 0"
-        )
-        print(f"标准形式: {nx:.4f}x + {ny:.4f}y + {nz:.4f}z + {d:.4f} = 0")
-
-        return best_equation, best_inliers
+        return best_plane, best_inliers
 
     def _validate_data(self, pcd_data: np.ndarray) -> None:
         """验证输入数据"""
@@ -160,11 +149,13 @@ class RansacPlaneFitter:
 
         # 如果点太少，直接返回
         if n_points < self._min_inliers:
-            return np.array([0, 0, 0, 0]), np.array(range(n_points))
+            raise ValueError(
+                f"输入点云数量 {n_points} 小于最小内点数量 {self._min_inliers}"
+            )
 
         # 初始化最佳结果
         best_inliers_ratio = 0  # 符合拟合模型的数据的比例
-        best_equation = np.array([0, 0, 0, 0])  # 最佳平面方程参数
+        best_plane = None  # 最佳平面方程参数
         best_inliers = np.array([])  # 最佳内点索引列表
 
         # 使用tqdm显示RANSAC迭代进度
@@ -179,15 +170,14 @@ class RansacPlaneFitter:
                 plane = estimate_plane(sample_points)
 
                 # 计算内点
-                inlier_mask = plane.calc_inliers(pcd_data, self._threshold)
+                inlier_mask = calc_inliers_plane(plane, pcd_data, self._threshold)
                 idx_candidates = np.where(inlier_mask)[0]
                 inliers_ratio = len(idx_candidates) / n_points
 
                 # 如果当前内点比例大于之前的最佳比例
                 if inliers_ratio > best_inliers_ratio:
                     best_inliers_ratio = inliers_ratio
-                    # 保存plane_model的参数格式 [cx, cy, cz, nx, ny, nz]
-                    # best_equation = plane_params.tolist()
+                    best_plane = plane
                     best_inliers = idx_candidates.tolist()
 
                     # 更新进度条描述，显示当前最佳内点比例
@@ -211,7 +201,7 @@ class RansacPlaneFitter:
                 f"警告：只找到 {len(best_inliers)} 个内点，少于最小要求 {self._min_inliers}"
             )
 
-        return best_equation, best_inliers
+        return best_plane, best_inliers
 
     def get_inliers(self) -> List[np.ndarray]:
         """获取内点坐标"""
@@ -223,28 +213,20 @@ class RansacPlaneFitter:
         """设置内点坐标"""
         self._inliers = inliers
 
-    def set_outliers(self, outliers: np.ndarray) -> None:
-        """设置外点坐标"""
-        self._outliers = outliers
-
-    def set_plane_equation(self, plane_equation: List[np.ndarray]) -> None:
-        """设置平面方程参数"""
-        self._plane_equation = plane_equation
-
     def get_outliers(self) -> np.ndarray:
         """获取外点坐标"""
         if self._outliers is None:
             raise ValueError("请先调用fit方法进行平面拟合")
         return self._outliers
 
-    def get_plane_equation(self) -> List[np.ndarray]:
-        """获取平面方程参数"""
-        if self._plane_equation is None:
+    def get_plane(self) -> List[BasePlane]:
+        """获取平面"""
+        if self._plane is None:
             raise ValueError("请先调用fit方法进行平面拟合")
-        return self._plane_equation
+        return self._plane
 
-    def get_plane_normal(self) -> np.ndarray:
-        """获取平面法向量"""
-        if self._plane_equation is None:
+    def set_plane(self, plane: List[BasePlane]) -> None:
+        """设置平面标准形式参数"""
+        if self._plane is None:
             raise ValueError("请先调用fit方法进行平面拟合")
-        return np.array(self._plane_equation[:3])
+        self._plane = plane

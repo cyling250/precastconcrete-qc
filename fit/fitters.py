@@ -1,6 +1,6 @@
 from typing import Optional
 import numpy as np
-from models import RansacPlaneFitter, PlaneModel, RansacLineFitter
+from models import RansacPlaneFitter, RansacLineFitter, calc_inliers_plane, BasePlane
 from .get_part import get_concrete_part, get_rebar_part
 import open3d as o3d
 
@@ -46,29 +46,35 @@ def concrete_fit(
         random_state=random_state,
     )
     plane_fitter.fit(concrete_pcd)  # 调用RANSAC平面检测函数
-    final_plane_equation = []
+    final_plane = []
     final_inliers = []
     # 对混凝土平面进行区分，以免存在多个点云共用一个平面
     concrete_inliers = plane_fitter.get_inliers()
-    concrete_equation = plane_fitter.get_plane_equation()
+    concrete_plane = plane_fitter.get_plane()
     for i in range(len(concrete_inliers)):
         pcd_temp = o3d.geometry.PointCloud()
         pcd_temp.points = o3d.utility.Vector3dVector(concrete_inliers[i])
-        # 可视化当前点云
-        o3d.visualization.draw_geometries([pcd_temp])
+
         # 对点云采用基于距离聚类，将点云分为多个子点云
         labels = pcd_temp.cluster_dbscan(eps=0.05, min_points=10, print_progress=debug)
         if len(np.unique(labels)) == 1:
+            # 如果只有一个聚类，直接添加到最终结果
             final_inliers.append(concrete_inliers[i])
-            final_plane_equation.append(concrete_equation[i])
+            final_plane.append(concrete_plane[i])
             continue
-        for cluster_id in np.unique(labels):
-            if cluster_id == -1:
+
+        for cluster_id in np.unique(labels):  # 如果点云可以分割为多个子点云，则进行分割
+            if cluster_id == -1:  # 如果是噪声点，直接跳过
                 continue
             final_inliers.append(concrete_inliers[i][labels == cluster_id])
-            final_plane_equation.append(concrete_equation[i])
+            # 新创建一个平面，参数为当前平面的参数，主要目的是为了后续区分不同的混凝土平面
+            final_plane.append(BasePlane(concrete_plane[i].get_parameters()))
+
+        if debug:
+            # DEBUG 可视化当前点云
+            o3d.visualization.draw_geometries(final_inliers)
     plane_fitter.set_inliers(final_inliers)
-    plane_fitter.set_plane_equation(final_plane_equation)
+    plane_fitter.set_plane(final_plane)
     return plane_fitter
 
 
@@ -106,24 +112,26 @@ def rebar_fit(
     )
     # 2 在钢筋点云上净化非钢筋点
     concrete_inliers = concrete_plane_fitter.get_inliers()
-    concrete_plane_equ = concrete_plane_fitter.get_plane_equation()
+    concrete_plane = concrete_plane_fitter.get_plane()
     for i in range(len(concrete_inliers)):
         # 计算当前平面与所有点的距离, 筛选出距离小于阈值的点
-        plane_model = PlaneModel()
-        plane_model.parameters = concrete_plane_equ[i]
-        inliners_mask = plane_model.calc_inliers(rebars_points, 0.01)
+        plane_model = concrete_plane[i]
+        inliners_mask = calc_inliers_plane(plane_model, rebars_points, 0.01)
         # 删除距离大于阈值的点
         rebars_points = rebars_points[~inliners_mask]
+
     # DEBUG 可视化
     if debug:
         rebars_pcd = o3d.geometry.PointCloud()
         rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
         o3d.visualization.draw_geometries([rebars_pcd])
+
     # 3 使用欧式聚类对筛选后的点云进行聚类
     rebars_pcd = o3d.geometry.PointCloud()
     rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug):
         labels = np.array(rebars_pcd.cluster_dbscan(eps=0.05, min_points=10))
+
     # 4 对每一类的钢筋进行拟合
     line_fitter_list = []
     for cluster_id in np.unique(labels):

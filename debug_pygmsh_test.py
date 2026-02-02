@@ -10,7 +10,7 @@ test_name = "prefabricated_laminated_beam"
 # test_name = "prefabricated_column"
 pcds = []
 planes = []
-for i in range(25):
+for i in range(6):
     # 读取点云
     pcd = o3d.io.read_point_cloud(f"output/{test_name}/concrete_inliers_{i}.ply")
     pcds.append(pcd)
@@ -31,11 +31,13 @@ for i in range(len(pcds)):
         if cross_line is None:
             print(f"平面{i}与平面{j}平行，无交线")
         else:
-            if cross_line.in_cloud(pcds[i].points):
+            if cross_line.in_cloud(pcds[i].points) and cross_line.in_cloud(
+                pcds[j].points
+            ):
                 cross_lines.append(cross_line)
-                print(f"平面{i}与平面{j}的交线在点云{i}中")
+                print(f"平面{i}与平面{j}的交线在点云中")
             else:
-                print(f"平面{i}与平面{j}的交线不在点云{i}中")
+                print(f"平面{i}与平面{j}的交线不在点云中")
 
 # 计算所有交线的交点
 cross_points: list[CrossPoint] = []

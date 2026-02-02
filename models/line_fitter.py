@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 from tqdm import tqdm
 import open3d as o3d
-from .line_model import BaseLine, estimate_line
+from .line_model import estimate_line, calc_inliers_line
 
 
 class RansacLineFitter:
@@ -61,7 +61,11 @@ class RansacLineFitter:
         if self._outliers.shape[0] < self._min_inliers:
             return
         while True:
-            self._fit_one(self._outliers, self._line_equation)  # 拟合直线
+            try:
+                self._fit_one(self._outliers, self._line_equation)  # 拟合直线
+            except ValueError as e:
+                print(e)
+                break
             # ============停止策略============
             # 1. 找到的直线大于设定的最大直线数
             # 2. 剩余内点数量不支持下一次迭代
@@ -182,7 +186,7 @@ class RansacLineFitter:
                 line = estimate_line(sample_points, control_line)
 
                 # 计算内点
-                inlier_mask = line.calc_inliers(pcd_data, self._threshold)
+                inlier_mask = calc_inliers_line(line, pcd_data, self._threshold)
                 idx_candidates = np.where(inlier_mask)[0]
                 inliers_ratio = len(idx_candidates) / n_points
 
@@ -209,7 +213,7 @@ class RansacLineFitter:
 
         # 检查是否找到足够的内点
         if len(best_inliers) < self._min_inliers:
-            print(
+            raise ValueError(
                 f"警告：只找到 {len(best_inliers)} 个内点，少于最小要求 {self._min_inliers}"
             )
 
