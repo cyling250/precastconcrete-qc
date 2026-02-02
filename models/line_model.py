@@ -1,5 +1,4 @@
 from typing import Set
-from typing import List
 import numpy as np
 
 
@@ -106,7 +105,7 @@ class CrossPoint:
         Args:
             location (np.ndarray): 交点模型参数，形状为 (3,)，包含点的坐标 [x, y, z]
         """
-        self.location = location
+        self._location = location
         self.link_lines: Set[CrossLine] = set([line1, line2])  # 连接的交线
 
     def equal(self, other: "CrossPoint") -> bool:
@@ -118,11 +117,11 @@ class CrossPoint:
         if self.__class__ != other.__class__:
             return False
         # 3. 两个点之间的距离是否小于1e-6
-        return np.linalg.norm(self.location - other.location) < 1e-6
+        return np.linalg.norm(self._location - other.get_location()) < 1e-6
 
     def get_location(self) -> np.ndarray:
         """返回交点模型的参数"""
-        return self.location
+        return self._location
 
 
 def SVD(points):

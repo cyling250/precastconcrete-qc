@@ -21,7 +21,7 @@ def desample_point_cloud(
 def point_cloud_intersect(
     pcd1: o3d.geometry.PointCloud | np.ndarray,
     pcd2: o3d.geometry.PointCloud | np.ndarray,
-    eps: float = 0.02,  # 距离阈值，核心参数
+    eps: float = 0.03,  # 距离阈值，核心参数
     use_aabb: bool = True,  # 是否使用AABB包围盒预过滤，默认开启（优化）
 ) -> bool:
     """

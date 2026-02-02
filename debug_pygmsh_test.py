@@ -27,14 +27,14 @@ cross_lines: list[CrossLine] = []
 for i in range(len(pcds)):
     for j in range(i + 1, len(pcds)):
         if not point_cloud_intersect(pcds[i].points, pcds[j].points):
-            print(f"点云{i}与点云{j}无交线")
             continue
-        plane = planes[i]
         # 计算平面的交线
-        cross_line = intersect_plane(plane, planes[j])
+        cross_line: CrossLine = intersect_plane(planes[i], planes[j])
         if cross_line is None:
-            print(f"点云{i}与点云{j}无交线")
+            continue
         else:
+            # 可视化两个点云
+            # o3d.visualization.draw_geometries([pcds[i], pcds[j]])
             print(f"点云{i}与点云{j}的交线为{cross_line.get_parameters()}")
             cross_lines.append(cross_line)
 
@@ -42,35 +42,74 @@ for i in range(len(pcds)):
 cross_points: list[CrossPoint] = []
 for i in range(len(cross_lines)):
     for j in range(i + 1, len(cross_lines)):
+        # 计算交线的交点
         cross_point = intersect_line(cross_lines[i], cross_lines[j])
+
         if cross_point is None:
             # print(f"交线{i}与交线{j}平行，无交点")
-            pass
-        else:
-            point_exists = False
-            for point in cross_points:
-                if cross_point.equal(point):
-                    point.link_lines.add(cross_lines[i])
-                    point.link_lines.add(cross_lines[j])
-                    point_exists = True
-                    break
-            if not point_exists:
-                cross_points.append(cross_point)
-            print(f"交线{i}与交线{j}的交点为{cross_point.get_location()}")
-
-# 判断点距离点云的距离小于阈值
-threshold = 0.1  # 取10cm即可，因为误差而被误判平行的点交点通常与点云距离超过10cm
-valid_points: list[CrossPoint] = []
-for point in cross_points:
-    for pcd in pcds:
-        distances = np.linalg.norm(pcd.points - point.get_location(), axis=1)
-        if np.min(distances) < threshold:
-            valid_points.append(point)
             break
+
+        is_valid = True
+        # 判断交点是否离四个点云都小于阈值
+        for distance_plane in [
+            cross_lines[i].plane1,
+            cross_lines[i].plane2,
+            cross_lines[j].plane1,
+            cross_lines[j].plane2,
+        ]:
+            pcd_idx = planes.index(distance_plane)  # 无需校验pcd_idx是否有效
+            distance_pcd = pcds[pcd_idx]  # 获取点云
+            # 计算交点到点云的距离
+            distances = np.linalg.norm(
+                distance_pcd.points - cross_point.get_location(), axis=1
+            )
+            if np.min(distances) > 0.05:  # 距离只要有一个大于10cm, 则认为不满足
+                is_valid = False
+                break
+        if not is_valid:  # 如果交点无效，则跳过
+            continue
+
+        # 将找到的点添加到cross_points中
+        point_exists = False
+        for point in cross_points:
+            if cross_point.equal(point):
+                # 如果该点已经被找到过一次，说明该点是由多条棱组成的，将当前的棱加入交点的链接集合
+                point.link_lines.add(cross_lines[i])
+                point.link_lines.add(cross_lines[j])
+                point_exists = True
+                break
+        if not point_exists:
+            cross_points.append(cross_point)
+        print(f"交线{i}与交线{j}的交点为{cross_point.get_location()}")
 
 print(f"共读取{len(planes)}个面")
 print(f"共计算出{len(cross_lines)}条交线")
-print(f"去重后共得到{len(valid_points)}个交点")
+print(f"共得到{len(cross_points)}个交点")
+# 可视化
+pcd = o3d.geometry.PointCloud()
+pcd.points = o3d.utility.Vector3dVector(
+    np.array([point.get_location() for point in cross_points])
+)
+o3d.visualization.draw_geometries([pcd])
+
+# # 判断点距离点云的距离小于阈值
+# threshold = 0.1  # 取10cm即可，因为误差而被误判平行的点交点通常与点云距离超过10cm
+# valid_points: list[CrossPoint] = []
+# for point in cross_points:
+#     for pcd in pcds:
+#         distances = np.linalg.norm(pcd.points - point.get_location(), axis=1)
+#         if np.min(distances) < threshold:
+#             valid_points.append(point)
+#             break
+valid_points = cross_points
+# # 可视化去重后的交点
+# pcd = o3d.geometry.PointCloud()
+# pcd.points = o3d.utility.Vector3dVector(
+#     np.array([point.get_location() for point in valid_points])
+# )
+# o3d.visualization.draw_geometries([pcd])
+# print(f"去重后共得到{len(valid_points)}个交点")
+
 # 重建三维模型
 import pygmsh
 
