@@ -51,6 +51,8 @@ for i in range(len(cross_lines)):
 
         is_valid = True
         # 判断交点是否离四个点云都小于阈值
+        # 可视化交点与四个点云
+        debug_pcds = []
         for distance_plane in [
             cross_lines[i].plane1,
             cross_lines[i].plane2,
@@ -59,16 +61,24 @@ for i in range(len(cross_lines)):
         ]:
             pcd_idx = planes.index(distance_plane)  # 无需校验pcd_idx是否有效
             distance_pcd = pcds[pcd_idx]  # 获取点云
+            debug_pcds.append(distance_pcd)
             # 计算交点到点云的距离
             distances = np.linalg.norm(
                 distance_pcd.points - cross_point.get_location(), axis=1
             )
-            if np.min(distances) > 0.05:  # 距离只要有一个大于10cm, 则认为不满足
+            if np.min(distances) > 0.07:  # 距离只要有一个大于10cm, 则认为不满足
                 is_valid = False
                 break
         if not is_valid:  # 如果交点无效，则跳过
             continue
-
+        # 可视化交点与四个点云
+        debug_pcd = o3d.geometry.PointCloud()
+        debug_pcd.points = o3d.utility.Vector3dVector(
+            np.array([cross_point.get_location()])
+        )
+        # 颜色设置为红色
+        debug_pcd.paint_uniform_color([1, 0, 0])
+        o3d.visualization.draw_geometries([debug_pcd] + debug_pcds)
         # 将找到的点添加到cross_points中
         point_exists = False
         for point in cross_points:
