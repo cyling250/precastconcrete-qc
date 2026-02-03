@@ -1,15 +1,22 @@
-from models.line_model import CrossLine
-from models.line_model import CrossPoint
-import open3d as o3d
 import numpy as np
-from models.plane_model import BasePlane, intersect_plane
-from models.line_model import intersect_line
-from utils.preprocess_utils import point_cloud_intersect
+import open3d as o3d
+import pygmsh
+import pyvista as pv
+
+from geometry import (
+    CrossLine,
+    CrossPoint,
+    BasePlane,
+    intersect_plane,
+    intersect_line,
+    intersect_plane_with_pcd,
+)
+from utils.pcd_utils import point_cloud_intersect
 
 # 读取文件
 test_name = "prefabricated_laminated_beam"
 # test_name = "prefabricated_column"
-pcds = []
+pcds: list[o3d.geometry.PointCloud] = []
 planes = []
 for i in range(26):
     # 读取点云
@@ -26,10 +33,10 @@ for i in range(26):
 cross_lines: list[CrossLine] = []
 for i in range(len(pcds)):
     for j in range(i + 1, len(pcds)):
-        if not point_cloud_intersect(pcds[i].points, pcds[j].points):
-            continue
         # 计算平面的交线
-        cross_line: CrossLine = intersect_plane(planes[i], planes[j])
+        cross_line: CrossLine = intersect_plane_with_pcd(
+            planes[i], planes[j], pcds[i].points, pcds[j].points
+        )
         if cross_line is None:
             continue
         else:
@@ -44,7 +51,6 @@ for i in range(len(cross_lines)):
     for j in range(i + 1, len(cross_lines)):
         # 计算交线的交点
         cross_point = intersect_line(cross_lines[i], cross_lines[j])
-
         if cross_point is None:
             # print(f"交线{i}与交线{j}平行，无交点")
             break
@@ -66,19 +72,19 @@ for i in range(len(cross_lines)):
             distances = np.linalg.norm(
                 distance_pcd.points - cross_point.get_location(), axis=1
             )
-            if np.min(distances) > 0.07:  # 距离只要有一个大于10cm, 则认为不满足
+            if np.min(distances) > 0.03:  # 距离只要有一个大于10cm, 则认为不满足
                 is_valid = False
                 break
         if not is_valid:  # 如果交点无效，则跳过
             continue
-        # 可视化交点与四个点云
-        debug_pcd = o3d.geometry.PointCloud()
-        debug_pcd.points = o3d.utility.Vector3dVector(
-            np.array([cross_point.get_location()])
-        )
-        # 颜色设置为红色
-        debug_pcd.paint_uniform_color([1, 0, 0])
-        o3d.visualization.draw_geometries([debug_pcd] + debug_pcds)
+        # # 可视化交点与四个点云
+        # debug_pcd = o3d.geometry.PointCloud()
+        # debug_pcd.points = o3d.utility.Vector3dVector(
+        #     np.array([cross_point.get_location()])
+        # )
+        # # 颜色设置为红色
+        # debug_pcd.paint_uniform_color([1, 0, 0])
+        # o3d.visualization.draw_geometries([debug_pcd] + debug_pcds)
         # 将找到的点添加到cross_points中
         point_exists = False
         for point in cross_points:
@@ -121,7 +127,7 @@ valid_points = cross_points
 # print(f"去重后共得到{len(valid_points)}个交点")
 
 # 重建三维模型
-import pygmsh
+
 
 with pygmsh.geo.Geometry() as geom:
     # 第一步：定义实体的顶点
@@ -190,7 +196,7 @@ with pygmsh.geo.Geometry() as geom:
     mesh.write("cube_mesh_ascii.vtk", file_format="vtk")
 
 print("三维面包围体网格生成完成，文件：cube_mesh_ascii.vtk")
-import pyvista as pv
+
 
 # 直接读取之前导出的网格可视化
 grid = pv.read("cube_mesh_ascii.vtk")
