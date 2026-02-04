@@ -72,14 +72,27 @@ def intersect_plane_with_pcd(
     cross_line = intersect_plane(plane1, plane2)
     if cross_line is None:
         return None
-    #  将点云向交线投影
+    # 判断点云是否相交 使用AABB包围盒区间重叠法
+    max_pcd1 = np.max(pcd1, axis=0)
+    min_pcd1 = np.min(pcd1, axis=0)
+    max_pcd2 = np.max(pcd2, axis=0)
+    min_pcd2 = np.min(pcd2, axis=0)
+    # 包围盒向外扩展1cm 只扩展其中一个
+    max_pcd1 += 0.01
+    min_pcd1 -= 0.01
+    max_pcd2 += 0.01
+    min_pcd2 -= 0.01
+    for i in range(3):
+        if max_pcd1[i] < min_pcd2[i] or max_pcd2[i] < min_pcd1[i]:
+            return None
+
     P0 = cross_line.parameters[0:3]  # 交线上的点
     V = cross_line.parameters[3:6]  # 交线方向向量
     proj_pcd1 = project_points_to_line(pcd1, P0, V)
     proj_pcd2 = project_points_to_line(pcd2, P0, V)
 
-    t_pcd1 = cross_line.get_line_parameters(proj_pcd1)
-    t_pcd2 = cross_line.get_line_parameters(proj_pcd2)
+    t_pcd1 = cross_line.get_point_lambda(proj_pcd1)
+    t_pcd2 = cross_line.get_point_lambda(proj_pcd2)
 
     # 计算两个投影点云在交线上的参数范围
     t_range1_min = np.min(t_pcd1)
@@ -97,13 +110,19 @@ def intersect_plane_with_pcd(
         point_end = P0 + t_intersect_max * V
         cross_line.point_start = point_start
         cross_line.point_end = point_end
+        cross_line.point_start_from = "PCD"
+        cross_line.point_end_from = "PCD"
     else:
         # 无交集，返回None
         return None
+    return cross_line
 
 
 def intersect_line(
-    line1: BaseLine | CrossLine, line2: BaseLine | CrossLine, eps: float = 1e-6
+    line1: BaseLine | CrossLine,
+    line2: BaseLine | CrossLine,
+    eps: float = 1e-6,
+    expand: float = 0.01,
 ) -> CrossPoint | None:
     """
     计算与另一条直线的交点（基于知乎几何算法）
@@ -111,11 +130,13 @@ def intersect_line(
     参数:
         line1: CrossLine | BaseLine, 直线1模型
         line2: CrossLine | BaseLine, 直线2模型
+        eps: float = 1e-6, 精度参数，默认值为 1e-6
+        expand: float = 0.01, 扩展参数，默认值为 0.01
 
     返回:
         CrossPoint | None, 交点对象，若直线平行或不相交则返回 None
     """
-    # 核心修改：通过get_parameters()解包直线参数
+    # 解包直线参数
     x1, y1, z1, a1, b1, c1 = line1.parameters
     x2, y2, z2, a2, b2, c2 = line2.parameters
 
@@ -194,8 +215,23 @@ def intersect_line(
         else:
             intersection_point = k2_pnt
 
+    # 交线的交点需要在交线的范围内
     if type(line1) is CrossLine:
-        # 交线的交点需要在交线的范围内
-        pass
+        t1 = line1.get_point_lambda(intersection_point)
+        range_line1 = [
+            line1.get_point_lambda(line1.point_start),
+            line1.get_point_lambda(line1.point_end),
+        ]
+        if min(range_line1) - expand > t1 or t1 > max(range_line1) + expand:
+            return None
+
+    if type(line2) is CrossLine:
+        t2 = line2.get_point_lambda(intersection_point)
+        range_line2 = [
+            line2.get_point_lambda(line2.point_start),
+            line2.get_point_lambda(line2.point_end),
+        ]
+        if min(range_line2) - expand > t2 or t2 > max(range_line2) + expand:
+            return None
 
     return CrossPoint(intersection_point, line1, line2)

@@ -34,8 +34,9 @@ class CrossLine(BaseLine):
 
         self.plane1 = plane1  # 交线所在的第一个平面
         self.plane2 = plane2  # 交线所在的第二个平面
-        self.point_start: np.ndarray = None  # 交线起点 由点云投影得到大致位置
-        self.point_end: np.ndarray = None  # 交线终点
+        self.point_start: np.ndarray = point_start  # 交线起点 由点云投影得到大致位置
+        self.point_end: np.ndarray = point_end  # 交线终点 由点云投影得到大致位置
+        self.link_points = []  # 连接的交点
 
     def __eq__(self, other: "CrossLine") -> bool:
         """判断两个交线是否相等"""
@@ -95,7 +96,7 @@ class CrossLine(BaseLine):
             min_distance = np.min(distances)
             return min_distance <= dst_threshold
 
-    def get_line_parameters(self, points: np.ndarray):
+    def get_point_lambda(self, points: np.ndarray):
         """计算每个点在交线上的参数t"""
         # 校验点在线上
         if self.parameters is None:
@@ -103,7 +104,7 @@ class CrossLine(BaseLine):
         c = self.parameters[0:3]
         n = self.parameters[3:6]
         # 计算点到直线的距离
-        distances = np.linalg.norm(np.cross(points - c, n), axis=1) / np.linalg.norm(n)
+        distances = np.linalg.norm(np.cross(points - c, n)) / np.linalg.norm(n)
         # 检查所有点是否都在线上
         if np.any(distances > 1e-6):
             raise ValueError("点不在交线上")
