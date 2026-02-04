@@ -3,7 +3,8 @@ import random
 from typing import Tuple, List
 import time
 from tqdm import tqdm
-from .plane_model import estimate_plane, calc_inliers_plane, BasePlane
+from geometry import BasePlane, estimate_plane, calc_inliers_plane
+import logging
 
 
 class RansacPlaneFitter:
@@ -66,7 +67,7 @@ class RansacPlaneFitter:
             try:
                 self._fit_one(self._outliers)  # 拟合平面
             except ValueError as e:
-                print(e)
+                logging.debug(e)
                 break
             # ============停止策略============
             # 1. 找到的平面大于设定的最大平面
@@ -81,7 +82,7 @@ class RansacPlaneFitter:
             ):
                 break
             if len(self._outliers) < self._min_inliers:
-                print(
+                logging.debug(
                     f"第{n_iter}次迭代，剩余外点数量不足{self._min_inliers}个，停止迭代"
                 )
                 break
@@ -118,8 +119,8 @@ class RansacPlaneFitter:
         # 计算拟合时间
         fitting_time = time.time() - start_time
 
-        print(f"第{len(self._plane)}个平面拟合完成，耗时: {fitting_time:.4f}秒")
-        print(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
+        logging.debug(f"第{len(self._plane)}个平面拟合完成，耗时: {fitting_time:.4f}秒")
+        logging.debug(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
 
         return best_plane, best_inliers
 
@@ -159,7 +160,9 @@ class RansacPlaneFitter:
         best_inliers = np.array([])  # 最佳内点索引列表
 
         # 使用tqdm显示RANSAC迭代进度
-        with tqdm(total=self._iterations, desc="RANSAC平面拟合", unit="iter") as pbar:
+        with tqdm(
+            total=self._iterations, desc=f"平面拟合<{len(self._plane)}>", unit="iter"
+        ) as pbar:
             for i in range(self._iterations):
                 # 随机选择n个点
                 point_num = np.random.randint(3, self._max_n_points)

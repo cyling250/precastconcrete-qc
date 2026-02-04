@@ -31,7 +31,6 @@ def neighbor_features(
     output_file: str,
     distance: float,
     feature_names=DEFAULT_NEIGHBOR_FEATURES,
-    is_visualize: bool = False,
 ):
     """
     计算点云中每个点在不同距离邻域内的特征
@@ -80,8 +79,6 @@ def neighbor_features(
         features["Z"][i] = point_cloud_c[i, 2]
         for name in feature_names:
             features[name][i] = getattr(eigen_measures, name)
-    if is_visualize:
-        visualize_features(point_cloud, features, feature_names)
     # 保存所有特征到单个npy文件
     save_features(features, output_file)
 

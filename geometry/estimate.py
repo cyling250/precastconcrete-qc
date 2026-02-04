@@ -1,7 +1,7 @@
 import numpy as np
 from .plane import BasePlane
 from .line import BaseLine
-from .geo_utils import SVD
+from .base_utils import SVD
 
 
 def calc_inliers_plane(
@@ -68,8 +68,6 @@ def estimate_plane(pts: np.ndarray) -> BasePlane:
         scale = [n[i] ** 2 for i in range(n.shape[0])]
         n = n / np.sqrt(np.sum(scale))
     else:
-        from .line_model import SVD
-
         _, _, c, n = SVD(pts)
 
     params = np.hstack((c.reshape(1, -1), n.reshape(1, -1)))[0, :]

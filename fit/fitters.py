@@ -1,8 +1,9 @@
 from typing import Optional
 import numpy as np
-from models import RansacPlaneFitter, RansacLineFitter, calc_inliers_plane, BasePlane
+from models import RansacPlaneFitter, RansacLineFitter
 from .get_part import get_concrete_part, get_rebar_part
 import open3d as o3d
+from geometry import BasePlane, calc_inliers_plane
 
 
 def concrete_fit(
@@ -16,7 +17,6 @@ def concrete_fit(
     max_plane_num: int = 20,
     random_state: Optional[int] = None,
     concrete_pcd: Optional[np.ndarray] = None,
-    debug: bool = False,
 ):
     """拟合混凝土点云
     Args:
@@ -56,7 +56,7 @@ def concrete_fit(
         pcd_temp.points = o3d.utility.Vector3dVector(concrete_inliers[i])
 
         # 对点云采用基于距离聚类，将点云分为多个子点云
-        labels = pcd_temp.cluster_dbscan(eps=0.05, min_points=10, print_progress=debug)
+        labels = pcd_temp.cluster_dbscan(eps=0.05, min_points=10, print_progress=False)
         if len(np.unique(labels)) == 1:
             # 如果只有一个聚类，直接添加到最终结果
             final_inliers.append(concrete_inliers[i])
@@ -68,11 +68,8 @@ def concrete_fit(
                 continue
             final_inliers.append(concrete_inliers[i][labels == cluster_id])
             # 新创建一个平面，参数为当前平面的参数，主要目的是为了后续区分不同的混凝土平面
-            final_plane.append(BasePlane(concrete_plane[i].get_parameters()))
+            final_plane.append(BasePlane(concrete_plane[i].parameters))
 
-        if debug:
-            # DEBUG 可视化当前点云
-            o3d.visualization.draw_geometries(final_inliers)
     plane_fitter.set_inliers(final_inliers)
     plane_fitter.set_plane(final_plane)
     return plane_fitter
@@ -89,7 +86,6 @@ def rebar_fit(
     max_n_points: int = 10,
     random_state: int = 42,
     linearity_threshold: float = 0.6,
-    debug: bool = False,
 ) -> list[RansacLineFitter]:
     """拟合钢筋点云
     Args:
@@ -120,12 +116,6 @@ def rebar_fit(
         # 删除距离大于阈值的点
         rebars_points = rebars_points[~inliners_mask]
 
-    # DEBUG 可视化
-    if debug:
-        rebars_pcd = o3d.geometry.PointCloud()
-        rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
-        o3d.visualization.draw_geometries([rebars_pcd])
-
     # 3 使用欧式聚类对筛选后的点云进行聚类
     rebars_pcd = o3d.geometry.PointCloud()
     rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
@@ -146,6 +136,7 @@ def rebar_fit(
             max_n_points=max_n_points,
             random_state=random_state,
             linearity_threshold=linearity_threshold,
+            idx=len(line_fitter_list) + 1,
         )
         line_fitter.fit(cluster_points)  # 调用RANSAC平面检测函数
         line_fitter_list.append(line_fitter)

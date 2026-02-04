@@ -110,8 +110,6 @@ def intersect_plane_with_pcd(
         point_end = P0 + t_intersect_max * V
         cross_line.point_start = point_start
         cross_line.point_end = point_end
-        cross_line.point_start_from = "PCD"
-        cross_line.point_end_from = "PCD"
     else:
         # 无交集，返回None
         return None

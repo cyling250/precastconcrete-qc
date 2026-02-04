@@ -1,3 +1,4 @@
+from fit.io import save_plane_params
 from fit.k_means import clustering
 from fit.neighbor_features import neighbor_features
 from fit.fitters import concrete_fit, rebar_fit
@@ -35,9 +36,6 @@ if __name__ == "__main__":
     # pcd = add_gaussian_noise(pcd)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
-    # DEBUG 可视化
-    if debug:
-        o3d.visualization.draw_geometries([pcd])
     # 2 计算邻域特征
     neighbor_features(
         point_data_np,
@@ -53,12 +51,14 @@ if __name__ == "__main__":
         output_file=f"output/{PCD_NAME}/cluster.ply",
         feature_weights=FEATURE_WEIGHTS,
     )
+
     # DEBUG 聚类结果可视化
     if debug:
         plane_pcd = pcd.select_by_index(np.where(labels == 0)[0])
         rebar_pcd = pcd.select_by_index(np.where(labels == 1)[0])
         o3d.visualization.draw_geometries([plane_pcd])
         o3d.visualization.draw_geometries([rebar_pcd])
+
     # 4 混凝土与钢筋拟合
     plane_fitter = concrete_fit(
         point_data_np,
@@ -71,6 +71,7 @@ if __name__ == "__main__":
         max_plane_num=20,
         debug=debug,
     )
+
     # 5 钢筋拟合
     line_fitters = rebar_fit(
         point_data_np,
@@ -86,39 +87,11 @@ if __name__ == "__main__":
         debug=debug,
     )
 
-    # 6 保存数据
-    # 6.1 为Point2CAD构造数据格式
-    all_point = plane_fitter.get_inliers()
-    show_list = []
-    for i in range(len(all_point)):
-        pcd_temp = o3d.geometry.PointCloud()
-        pcd_temp.points = o3d.utility.Vector3dVector(all_point[i])
-
-        # 点云的体积选取合适的体素大小，当点云数量少于500个时，不进行下采样
-        if len(all_point[i]) > 500:
-            pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.01)
-            all_point[i] = np.asarray(pcd_temp.points)
-
-        # 离群点删除
-        cl, ind = pcd_temp.remove_radius_outlier(nb_points=1, radius=0.04)
-        pcd_temp.points = o3d.utility.Vector3dVector(np.asarray(pcd_temp.points)[ind])
-        # 为每个点云生成不同的随机颜色
-        random_color = np.random.rand(3)  # 生成随机RGB颜色
-        current_points = np.asarray(pcd_temp.points)
-        pcd_temp.colors = o3d.utility.Vector3dVector(
-            np.tile(random_color, (len(current_points), 1))
-        )
-        # 保存平面点云
-        o3d.io.write_point_cloud(
-            f"output/{PCD_NAME}/concrete_inliers_{i}.ply", pcd_temp
-        )
-        # 保存平面公式
-        plane_params = plane_fitter.get_plane()[i].get_parameters()
-        np.save(f"output/{PCD_NAME}/concrete_plane_params_{i}.npy", plane_params)
-        show_list.append(pcd_temp)
+    # 6 保存混凝土与钢筋拟合结果
+    pcd_list = save_plane_params(plane_fitter, PCD_NAME)
 
     # 可视化下采样后的点云
-    o3d.visualization.draw_geometries(show_list)
+    o3d.visualization.draw_geometries(pcd_list)
 
     # 保存钢筋拟合结果
     i = 0

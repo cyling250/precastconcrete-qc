@@ -3,7 +3,8 @@ from typing import List
 import numpy as np
 from tqdm import tqdm
 import open3d as o3d
-from .line_model import estimate_line, calc_inliers_line
+from geometry import estimate_line, calc_inliers_line
+import logging
 
 
 class RansacLineFitter:
@@ -29,6 +30,7 @@ class RansacLineFitter:
         max_n_points: int = 10,
         random_state: int = 42,
         linearity_threshold: float = 0.6,
+        idx: int = 0,
     ):
         self._threshold = threshold
         self._iterations = iterations
@@ -36,6 +38,7 @@ class RansacLineFitter:
         self._max_n_points = max_n_points
         self._random_state = random_state
         self._linearity_threshold = linearity_threshold
+        self._idx = idx
 
         # 拟合结果
         # 直线方程参数 [cx, cy, cz, nx, ny, nz]
@@ -79,7 +82,7 @@ class RansacLineFitter:
             ):
                 break
             if len(self._outliers) < self._min_inliers:
-                print(
+                logging.debug(
                     f"第{n_iter}次迭代，剩余外点数量不足{self._min_inliers}个，停止迭代"
                 )
                 break
@@ -122,11 +125,13 @@ class RansacLineFitter:
         self._outliers = pcd_data[~inlier_mask]
         # 计算拟合时间
         fitting_time = time.time() - start_time
-        print(f"第{len(self._line_equation)}个直线拟合完成，耗时: {fitting_time:.4f}秒")
-        print(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
+        logging.debug(
+            f"第{len(self._line_equation)}个直线拟合完成，耗时: {fitting_time:.4f}秒"
+        )
+        logging.debug(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
         # 直线参数格式: [cx, cy, cz, nx, ny, nz]
         cx, cy, cz, nx, ny, nz = best_equation
-        print(
+        logging.debug(
             f"直线方程: (x - {cx:.4f})/{nx:.4f} = (y - {cy:.4f})/{ny:.4f} = (z - {cz:.4f})/{nz:.4f}"
         )
 
@@ -169,7 +174,11 @@ class RansacLineFitter:
         best_inliers = []  # 最佳内点索引列表
 
         # 使用tqdm显示RANSAC迭代进度
-        with tqdm(total=self._iterations, desc="RANSAC直线拟合", unit="iter") as pbar:
+        with tqdm(
+            total=self._iterations,
+            desc=f"直线拟合<{self._idx}-{len(self._line_equation)}>",
+            unit="iter",
+        ) as pbar:
             for i in range(self._iterations):
                 # 随机选择n个点
                 point_num = np.random.randint(2, self._max_n_points)
