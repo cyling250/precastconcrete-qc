@@ -48,20 +48,12 @@ def visualize_cross_lines(cross_lines: list[CrossLine]):
     geometries = []
     for line in cross_lines:
         line_pcd = o3d.geometry.PointCloud()
-        if (
-            line.link_points[0].location is not None
-            and line.link_points[1].location is not None
-        ):
+        if len(line.link_points) == 2:
             line_pcd_point = np.linspace(
                 line.link_points[0].location, line.link_points[1].location, num=1000
             )
-        elif (
-            line.point_start.location is not None
-            and line.point_end.location is not None
-        ):
-            line_pcd_point = np.linspace(
-                line.point_start.location, line.point_end.location, num=1000
-            )
+        elif line.point_start is not None and line.point_end is not None:
+            line_pcd_point = np.linspace(line.point_start, line.point_end, num=1000)
         line_pcd.points = o3d.utility.Vector3dVector(line_pcd_point)
         # 交线赋值为红色
         line_pcd.paint_uniform_color([1, 0, 0])
