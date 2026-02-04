@@ -12,11 +12,11 @@ from geometry import (
 )
 
 # =====================读取文件=====================
-test_name = "prefabricated_laminated_beam"
-# test_name = "prefabricated_column"
+# test_name = "prefabricated_laminated_beam"
+test_name = "prefabricated_column"
 pcds: list[o3d.geometry.PointCloud] = []
 planes = []
-for i in range(26):
+for i in range(6):
     # 读取点云
     pcd = o3d.io.read_point_cloud(f"output/{test_name}/concrete_inliers_{i}.ply")
     pcds.append(pcd)
@@ -244,13 +244,13 @@ with pygmsh.geo.Geometry() as geom:
 
     # 第六步：生成网格并保存
     mesh = geom.generate_mesh()
-    mesh.write("cube_mesh_ascii.vtk", file_format="vtk")
+    mesh.write(f"output/{test_name}/mesh.vtk", file_format="vtk")
 
-print("三维面包围体网格生成完成，文件：cube_mesh_ascii.vtk")
+print(f"三维面包围体网格生成完成，文件：output/{test_name}/mesh.vtk")
 
 
 # 直接读取之前导出的网格可视化
-grid = pv.read("cube_mesh_ascii.vtk")
+grid = pv.read(f"output/{test_name}/mesh.vtk")
 plotter = pv.Plotter()
 plotter.add_mesh(grid, show_edges=True, color="white")
 plotter.add_axes(line_width=2)
