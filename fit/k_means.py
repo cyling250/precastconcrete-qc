@@ -11,6 +11,7 @@ import numpy as np
 import open3d as o3d
 from models.adj_k_means import AdjustKMeans
 from utils.eigen_measures_utils import create_feature_vector
+import logging
 
 
 def save_clusters(
@@ -87,5 +88,5 @@ def clustering(
             kmeans.labels_,
             output_file,
         )
-        print(f"聚类结果已保存到 {output_file}")
+        logging.info(f"聚类结果已保存到 {output_file}")
     return kmeans.labels_

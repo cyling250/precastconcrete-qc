@@ -1,4 +1,4 @@
-from geometry import CrossPoint, CrossLine, BasePlane
+from geometry import BasePoint, CrossLine, BasePlane, SegmentLine
 import pygmsh
 import numpy as np
 
@@ -53,28 +53,28 @@ def calculate_loop_area(loop_lines):
 
 
 def generate_lines_and_points(
-    cross_points: list[CrossPoint],
-    cross_lines: list[CrossLine],
+    points: list[BasePoint],
+    segment_lines: list[SegmentLine],
     geom: pygmsh.geo.Geometry,
 ):
     """
     生成交线的点和线的几何对象
 
     Args:
-        cross_points (list[CrossPoint]): 交线的交点列表
-        cross_lines (list[CrossLine]): 交线的列表
+        cross_points (list[BasePoint]): 交线的交点列表
+        segment_lines (list[SegmentLine]): 交线的列表
     """
     # 定义实体的顶点和棱
-    geom_points = []  # 存储所有有效点的几何点对象 和 cross_points中的点有序对应
-    for point in cross_points:
+    geom_points = []  # 存储所有有效点的几何点对象 和 points中的点有序对应
+    for point in points:
         geom_points.append(geom.add_point(point.location, mesh_size=0.2))
 
     # 定义实体的棱
-    geom_lines = []  # 存储所有有效线的几何线对象 和 cross_lines中的线有序对应
-    for line in cross_lines:
+    geom_lines = []  # 存储所有有效线的几何线对象 和 segment_lines中的线有序对应
+    for line in segment_lines:
         link_points: list[int] = []
-        point1_idx = np.where(np.array(cross_points) == line.link_points[0])[0][0]
-        point2_idx = np.where(np.array(cross_points) == line.link_points[1])[0][0]
+        point1_idx = np.where(np.array(points) == line.link_points[0])[0][0]
+        point2_idx = np.where(np.array(points) == line.link_points[1])[0][0]
         link_points.append(point1_idx)
         link_points.append(point2_idx)
         line_geom = geom.add_line(
@@ -96,6 +96,7 @@ def build_face(
     Args:
         planes (list[BasePlane]): 平面列表
         cross_lines (list[CrossLine]): 交线的列表
+        segment_lines (list[SegmentLine]): 线段的列表 和 cross_lines中的线有序对应
         geom_lines (list[pygmsh.geo.Line]): 几何线的列表
     """
     faces = []

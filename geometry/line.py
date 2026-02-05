@@ -3,7 +3,7 @@ import numpy as np
 
 
 class BaseLine(object):
-    def __init__(self, params: np.ndarray):
+    def __init__(self, params: np.ndarray, **kwargs):
         # 线段参数（线段上任意一点 cx, cy, cx） + （线段方向向量 nx, ny, nz）
         if params is None or type(params) is not np.ndarray or params.shape[0] != 6:
             raise AttributeError("直线模型参数必须是六维ndarray数组")
@@ -18,85 +18,7 @@ class BaseLine(object):
         """返回直线模型的字符串表示"""
         return f"BaseLine({self.parameters})"
 
-
-class CrossLine(BaseLine):
-    """由两个平面相交所得到的线段模型"""
-
-    def __init__(
-        self,
-        params: np.ndarray,
-        plane1,
-        plane2,
-        point_start: np.ndarray = None,
-        point_end: np.ndarray = None,
-    ):
-        super().__init__(params)
-
-        self.plane1 = plane1  # 交线所在的第一个平面
-        self.plane2 = plane2  # 交线所在的第二个平面
-        self.point_start: np.ndarray = point_start  # 交线起点 由点云投影得到大致位置
-        self.point_end: np.ndarray = point_end  # 交线终点 由点云投影得到大致位置
-        self.link_points = []  # 连接的交点
-
-    def __eq__(self, other: "CrossLine") -> bool:
-        """判断两个交线是否相等"""
-        # 两个交线相等，它们的plane1和plane2必须相等或者它们的plane1和plane2交换顺序后相等
-        if self.plane1 == other.plane1 and self.plane2 == other.plane2:
-            return True
-        if self.plane1 == other.plane2 and self.plane2 == other.plane1:
-            return True
-        return False
-
-    def __hash__(self):
-        """返回交线的哈希值"""
-        plane_set = (self.plane1.__hash__(), self.plane2.__hash__())
-        return hash(plane_set)
-
-    @deprecated
-    def in_cloud(self, points: np.ndarray, dst_threshold: float = 0.05) -> bool:
-        """判断交线是否在点云中
-
-        Args:
-            points (np.ndarray): 输入点云，形状为 (N, 3)
-            dst_threshold (float, optional): 距离阈值，默认值为 0.01
-
-        Returns:
-            bool: True表示交线在点云中，False表示交线不在点云中
-        """
-        # 1. 将点云向self._plane1投影
-        from .plane_model import project2plane
-
-        projected_points = project2plane(self.plane1, points)
-
-        # 获取交线参数
-        P0 = self.parameters[0:3]  # 交线起点
-        V = self.parameters[3:6]  # 交线方向向量
-
-        # 2. 判断点云在直线的哪一边
-        # 生成点云中的点到直线上该点的向量
-        vectors_to_line = projected_points - P0
-
-        # 用该向量与直线的方向向量做叉乘
-        cross_products = np.cross(vectors_to_line, V)
-
-        # 核对叉乘结果是否在同一边
-        # 叉乘结果的符号表示点在直线的哪一侧
-        # 如果所有叉乘结果的某个分量（如z分量）符号相同，则点在同一边
-        cross_z_signs = np.sign(cross_products[:, 2])  # 取z分量符号
-        unique_signs = np.unique(cross_z_signs)
-
-        if len(unique_signs) > 1:
-            # 点云分布在直线两侧，返回True
-            return True
-        else:
-            # 点云都在直线同一侧，判断距离
-            # 计算每个点到交线的最短距离
-            distances = np.linalg.norm(cross_products, axis=1) / np.linalg.norm(V)
-            # 判断最近的点是否小于阈值
-            min_distance = np.min(distances)
-            return min_distance <= dst_threshold
-
-    def get_point_lambda(self, points: np.ndarray):
+    def get_point_lambda(self, points):
         """计算每个点在交线上的参数t"""
         # 校验点在线上
         if self.parameters is None:
@@ -112,3 +34,92 @@ class CrossLine(BaseLine):
         vectors = points - self.parameters[0:3]
         t = np.dot(vectors, self.parameters[3:6])
         return t
+
+
+class SegmentLine(BaseLine):
+    """由线段上的两个点所得到的线段模型"""
+
+    def __init__(
+        self,
+        params: np.ndarray,
+        link_points: list["BasePoint"] = None,
+        **kwargs,
+    ):
+        super().__init__(params)
+        if link_points is None:
+            self.link_points = [None, None]
+        else:
+            self.link_points = link_points
+
+    def __eq__(self, other: "SegmentLine") -> bool:
+        """判断两个线段是否相等"""
+        if self.link_points[0] is None or self.link_points[1] is None:
+            return False
+        if (
+            self.link_points[0] == other.link_points[0]
+            and self.link_points[1] == other.link_points[1]
+        ):
+            return True
+        if (
+            self.link_points[0] == other.link_points[1]
+            and self.link_points[1] == other.link_points[0]
+        ):
+            return True
+        return False
+
+    def add_link_point(self, point: "BasePoint"):
+        """添加线段的一个端点"""
+        # 校验点在直线上
+        self.get_point_lambda(point.location)
+        # 校验点是否已经添加
+        if point in self.link_points:
+            return
+        if self.link_points[0] is None:
+            self.link_points[0] = point
+        elif self.link_points[1] is None:
+            self.link_points[1] = point
+        else:
+            raise ValueError("线段已经有两个端点")
+
+    def __str__(self) -> str:
+        """返回线段模型的字符串表示"""
+        return f"SegmentLine({self.parameters}, {self.link_points})"
+
+
+class CrossLine(BaseLine):
+    """由两个平面相交所得到的线段模型"""
+
+    def __init__(
+        self,
+        params: np.ndarray,
+        plane1: "BasePlane",
+        plane2: "BasePlane",
+        point_start: np.ndarray = None,
+        point_end: np.ndarray = None,
+        **kwargs,
+    ):
+        super().__init__(params)
+
+        self.plane1 = plane1  # 交线所在的第一个平面
+        self.plane2 = plane2  # 交线所在的第二个平面
+        self.point_start: np.ndarray = point_start  # 交线起点 由点云投影得到大致位置
+        self.point_end: np.ndarray = point_end  # 交线终点 由点云投影得到大致位置
+
+    def __eq__(self, other: "CrossLine") -> bool:
+        """判断两个交线是否相等"""
+        # 两个交线相等，它们的plane1和plane2必须相等或者它们的plane1和plane2交换顺序后相等
+        if self.plane1 == other.plane1 and self.plane2 == other.plane2:
+            return True
+        if self.plane1 == other.plane2 and self.plane2 == other.plane1:
+            return True
+        return False
+
+    def __hash__(self):
+        """返回交线的哈希值"""
+        plane_set = (self.plane1.__hash__(), self.plane2.__hash__())
+        return hash(plane_set)
+
+
+if __name__ == "__main__":
+    from .point import BasePoint
+    from .plane import BasePlane

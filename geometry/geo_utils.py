@@ -1,7 +1,7 @@
 import numpy as np
 from .line import BaseLine, CrossLine
 from .plane import BasePlane
-from .point import CrossPoint
+from .point import BasePoint
 from .base_utils import project_points_to_line
 
 
@@ -121,7 +121,7 @@ def intersect_line(
     line2: BaseLine | CrossLine,
     eps: float = 1e-6,
     expand: float = 0.01,
-) -> CrossPoint | None:
+) -> BasePoint | None:
     """
     计算与另一条直线的交点（基于知乎几何算法）
 
@@ -132,7 +132,7 @@ def intersect_line(
         expand: float = 0.01, 扩展参数，默认值为 0.01
 
     返回:
-        CrossPoint | None, 交点对象，若直线平行或不相交则返回 None
+        BasePoint | None, 交点对象，若直线平行或不相交则返回 None
     """
     # 解包直线参数
     x1, y1, z1, a1, b1, c1 = line1.parameters
@@ -232,4 +232,4 @@ def intersect_line(
         if min(range_line2) - expand > t2 or t2 > max(range_line2) + expand:
             return None
 
-    return CrossPoint(intersection_point, line1, line2)
+    return BasePoint(intersection_point)

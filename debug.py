@@ -19,7 +19,7 @@ from rebuild.topology import (
 )
 from geometry import BasePlane
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 if __name__ == "__main__":
     # ==============0 定义参数==============
@@ -153,21 +153,25 @@ if __name__ == "__main__":
         plane: BasePlane = BasePlane.read_from_npy(plane_file)
         planes.append(plane)
         logging.info(f"成功加载平面 {i}: 点云文件 {pcd_file}, 参数文件 {plane_file}")
-
     logging.info(f"成功加载 {len(planes)} 个平面和对应的点云")
+
+    logging.info("计算交线...")
     cross_lines = get_cross_lines_by_plane(pcds, planes)
     visualize_cross_lines(cross_lines)
-    cross_points, cross_lines = get_cross_points_by_cross_lines(
+    logging.info(f"交线数量: {len(cross_lines)}")
+
+    logging.info("计算线段交点...")
+    cross_points, segment_lines = get_cross_points_by_cross_lines(
         cross_lines, expand_list=EXAPND_LIST
     )
-    logging.info(f"交线数量: {len(cross_lines)}")
     logging.info(f"交点数量: {len(cross_points)}")
-    visualize_cross_lines(cross_lines)
+
+    visualize_cross_lines(segment_lines)
 
     with pygmsh.geo.Geometry() as geom:
         # 定义实体的顶点和棱
         geom_points, geom_lines = generate_lines_and_points(
-            cross_points, cross_lines, geom
+            cross_points, segment_lines, geom
         )
 
         # 由线环构建面

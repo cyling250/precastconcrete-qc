@@ -1,12 +1,14 @@
 import numpy as np
 from geometry import (
     BasePlane,
+    SegmentLine,
     CrossLine,
     intersect_plane_with_pcd,
-    CrossPoint,
     intersect_line,
+    BasePoint,
 )
 import open3d as o3d
+import logging
 
 
 def get_cross_lines_by_plane(
@@ -48,12 +50,15 @@ def visualize_cross_lines(cross_lines: list[CrossLine]):
     geometries = []
     for line in cross_lines:
         line_pcd = o3d.geometry.PointCloud()
-        if len(line.link_points) == 2:
+        if isinstance(line, CrossLine):
+            line_pcd_point = np.linspace(line.point_start, line.point_end, num=1000)
+        elif isinstance(line, SegmentLine):
+            if line.link_points[0] is None or line.link_points[1] is None:
+                logging.warning(f"线段{line}的起(终)点为空")
+                continue
             line_pcd_point = np.linspace(
                 line.link_points[0].location, line.link_points[1].location, num=1000
             )
-        elif line.point_start is not None and line.point_end is not None:
-            line_pcd_point = np.linspace(line.point_start, line.point_end, num=1000)
         line_pcd.points = o3d.utility.Vector3dVector(line_pcd_point)
         # 交线赋值为红色
         line_pcd.paint_uniform_color([1, 0, 0])
@@ -64,7 +69,7 @@ def visualize_cross_lines(cross_lines: list[CrossLine]):
 def get_cross_points_by_cross_lines(
     cross_lines: list[CrossLine],
     expand_list: list[float] = [0, 0.01, 0.02, 0.03, 0.04, 0.05],
-) -> tuple[list[CrossPoint], list[CrossLine]]:
+) -> tuple[list[BasePoint], list[SegmentLine]]:
     """根据交线计算交点
 
     Args:
@@ -72,8 +77,12 @@ def get_cross_points_by_cross_lines(
         expand_list (list[float]): 扩展参数列表，用于计算交线的交点，默认值为[0, 0.01, 0.02, 0.03, 0.04, 0.05]
 
     Returns:
-        tuple[list[CrossPoint], list[CrossLine]]: 所有交线的交点列表和交线列表
+        tuple[list[BasePoint], list[SegmentLine]]: 所有交线的交点列表和交线列表
     """
+    # 初始化线段列表，长度和交线列表一致
+    segment_lines: list[SegmentLine] = [
+        SegmentLine(line.parameters) for line in cross_lines
+    ]
     for i in range(len(cross_lines)):
         # 按照0.01的扩展参数计算交线的交点
         real_link_point_complete = False
@@ -81,7 +90,7 @@ def get_cross_points_by_cross_lines(
             if real_link_point_complete:
                 break
             for j in range(len(cross_lines)):
-                if len(cross_lines[i].link_points) == 2:
+                if None not in segment_lines[i].link_points:
                     # 当得到2个交点时，跳出循环
                     real_link_point_complete = True
                     break
@@ -89,22 +98,24 @@ def get_cross_points_by_cross_lines(
                     # 交线i与交线j是同一个交线，跳过
                     continue
                 # 计算交线的交点
-                cross_point: CrossPoint | None = intersect_line(
+                cross_point: BasePoint | None = intersect_line(
                     cross_lines[i], cross_lines[j], expand=expand
                 )
                 # 保存交点
                 if cross_point is not None:
-                    if cross_point not in cross_lines[i].link_points:
-                        cross_lines[i].link_points.append(cross_point)
-    cross_points: list[CrossPoint] = []
-    for line in cross_lines:
+                    logging.debug(f"交线{i}与交线{j}的交点为{cross_point}")
+                    segment_lines[i].add_link_point(cross_point)
+
+    points: list[BasePoint] = []
+    for line in segment_lines:
         for point in line.link_points:
-            if point not in cross_points:
-                cross_points.append(point)
+            if point not in points:
+                points.append(point)
+
     # 数据校验，要求每个交线的连接点数量为2
-    for line in cross_lines:
-        if len(line.link_points) != 2:
+    for line in segment_lines:
+        if None in line.link_points:
             raise ValueError(
                 f"交线{line}的连接点数量不为2，实际为{len(line.link_points)}"
             )
-    return cross_points, cross_lines
+    return points, segment_lines

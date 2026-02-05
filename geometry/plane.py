@@ -40,7 +40,7 @@ class BasePlane(object):
             self.parameters[3:6]
         )
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: "BasePlane") -> bool:
         """判断两个平面是否是同一个平面"""
         return self._id == other._id
 
