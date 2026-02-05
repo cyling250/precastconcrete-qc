@@ -12,12 +12,16 @@ from fit.neighbor_features import neighbor_features
 from fit.fitters import concrete_fit, rebar_fit
 from utils.noise_utils import add_gaussian_noise
 from rebuild.mesh import build_face, generate_lines_and_points
-from rebuild.topology import (
+from rebuild.concrete_topology import (
     visualize_cross_lines,
     get_cross_points_by_cross_lines,
     get_cross_lines_by_plane,
 )
-from geometry import BasePlane
+from rebuild.rebar_topology import (
+    get_rebar_param_by_line_fitter,
+    get_rebar_param_by_line_fitter_v2,
+)
+from geometry import BasePlane, SegmentLine
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -48,7 +52,7 @@ if __name__ == "__main__":
     CONCRETE_MAX_N_POINTS = 4  # 最大点数量
     CONCRETE_MAX_PLANE_NUM = 20  # 最大平面数量
     # 钢筋拟合参数
-    REBAR_THRESHOLD = 0.01  # 阈值
+    REBAR_THRESHOLD = 0.007  # 阈值
     REBAR_ITERATIONS = 2000  # 迭代次数
     REBAR_MIN_INLIERS = 10  # 最小内点数量
     REBAR_MAX_N_POINTS = 10  # 最大点数量
@@ -170,7 +174,10 @@ if __name__ == "__main__":
 
     visualize_cross_lines(concrete_segment_lines)
 
-    with pygmsh.geo.Geometry() as geom:
+    logging.info("钢筋重建...")
+    rebar_params = get_rebar_param_by_line_fitter_v2(line_fitters)
+
+    with pygmsh.occ.Geometry() as geom:
         # 定义实体的顶点和棱
         geom_points, geom_lines = generate_lines_and_points(
             concrete_cross_points, concrete_segment_lines, geom
@@ -187,9 +194,35 @@ if __name__ == "__main__":
 
         # 生成网格并保存
         mesh = geom.generate_mesh()
-        mesh.write(f"{OUTPUT_DIR}/{PCD_NAME}/mesh.vtk", file_format="vtk")
+        mesh.write(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk", file_format="vtk")
+        logging.info(
+            f"三维面包围体网格生成完成，文件：{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk"
+        )
 
-    logging.info(f"三维面包围体网格生成完成，文件：{OUTPUT_DIR}/{PCD_NAME}/mesh.vtk")
+    with pygmsh.occ.Geometry() as geom:
+        # 按照三维圆柱添加钢筋
+        rebar_3d = []
+        for rebar_param in rebar_params:
+            segment_line, radius = rebar_param
+            # 钢筋长度
+            logging.info(f"添加钢筋 {segment_line}，半径 {radius}")
+            rebar_3d.append(
+                geom.add_cylinder(
+                    segment_line.link_points[0].location,
+                    segment_line.link_points[1].location
+                    - segment_line.link_points[0].location,
+                    radius=radius,
+                    mesh_size=radius / 2,
+                )
+            )
+
+        # 生成网格并保存
+        mesh = geom.generate_mesh()
+        mesh.write(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk", file_format="vtk")
+
+        logging.info(
+            f"三维面包围体网格生成完成，文件：{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk"
+        )
 
     # ==============10 可视化网格==============
     grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh.vtk")

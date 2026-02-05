@@ -53,19 +53,13 @@ class SegmentLine(BaseLine):
 
     def __eq__(self, other: "SegmentLine") -> bool:
         """判断两个线段是否相等"""
-        if self.link_points[0] is None or self.link_points[1] is None:
-            return False
-        if (
+        return (
             self.link_points[0] == other.link_points[0]
             and self.link_points[1] == other.link_points[1]
-        ):
-            return True
-        if (
+        ) or (
             self.link_points[0] == other.link_points[1]
             and self.link_points[1] == other.link_points[0]
-        ):
-            return True
-        return False
+        )
 
     def add_link_point(self, point: "BasePoint"):
         """添加线段的一个端点"""

@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 from tqdm import tqdm
 import open3d as o3d
-from geometry import estimate_line, calc_inliers_line
+from geometry import BaseLine, estimate_line, calc_inliers_line
 import logging
 
 
@@ -42,7 +42,7 @@ class RansacLineFitter:
 
         # 拟合结果
         # 直线方程参数 [cx, cy, cz, nx, ny, nz]
-        self._line_equation: List[np.ndarray] = []
+        self._line: List[BaseLine] = []
         self._inliers: List[np.ndarray] = []  # 内点坐标列表
         self._n_inliers: List[int] = []  # 内点数量
         self._outliers: np.ndarray | None = None  # 外点坐标
@@ -65,7 +65,7 @@ class RansacLineFitter:
             return
         while True:
             try:
-                self._fit_one(self._outliers, self._line_equation)  # 拟合直线
+                self._fit_one(self._outliers, self._line)  # 拟合直线
             except ValueError as e:
                 print(e)
                 break
@@ -76,8 +76,8 @@ class RansacLineFitter:
             # ===============================
             n_iter += 1
             if (
-                self._line_equation is not None
-                and len(self._line_equation) >= self._max_n_points
+                self._line is not None
+                and len(self._line) >= self._max_n_points
                 or n_iter >= self._iterations
             ):
                 break
@@ -113,10 +113,10 @@ class RansacLineFitter:
         pcd_data = np.asarray(pcd.points)[ind]
 
         # 执行RANSAC直线检测
-        best_equation, best_inliers = self._ransac_line(pcd_data, control_lines)
+        best_line, best_inliers = self._ransac_line(pcd_data, control_lines)
 
         # 保存拟合结果
-        self._line_equation.append(best_equation)
+        self._line.append(best_line)
         self._inliers.append(pcd_data[best_inliers])  # 直接保存内点坐标
         self._n_inliers.append(len(best_inliers))
         # 更新外点
@@ -125,12 +125,10 @@ class RansacLineFitter:
         self._outliers = pcd_data[~inlier_mask]
         # 计算拟合时间
         fitting_time = time.time() - start_time
-        logging.debug(
-            f"第{len(self._line_equation)}个直线拟合完成，耗时: {fitting_time:.4f}秒"
-        )
+        logging.debug(f"第{len(self._line)}个直线拟合完成，耗时: {fitting_time:.4f}秒")
         logging.debug(f"内点数量: {self._n_inliers[-1]} / {len(pcd_data)}")
         # 直线参数格式: [cx, cy, cz, nx, ny, nz]
-        cx, cy, cz, nx, ny, nz = best_equation
+        cx, cy, cz, nx, ny, nz = best_line.parameters
         logging.debug(
             f"直线方程: (x - {cx:.4f})/{nx:.4f} = (y - {cy:.4f})/{ny:.4f} = (z - {cz:.4f})/{nz:.4f}"
         )
@@ -150,7 +148,7 @@ class RansacLineFitter:
 
     def _ransac_line(
         self, pcd_data: np.ndarray, control_lines: List[np.ndarray] | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> [BaseLine, np.ndarray]:
         """
         RANSAC直线检测核心算法
 
@@ -166,17 +164,19 @@ class RansacLineFitter:
 
         # 如果点太少，直接返回
         if n_points < self._min_inliers:
-            return np.array([0, 0, 0, 1, 0, 0]), np.array(list(range(n_points)))
+            raise ValueError(
+                f"警告：点云数据数量 {n_points} 少于最小要求 {self._min_inliers} 个，无法拟合直线"
+            )
 
         # 初始化最佳结果
         best_inliers_ratio = 0  # 符合拟合模型的数据的比例
-        best_equation = [0, 0, 0, 1, 0, 0]  # 最佳直线方程参数
+        best_line: BaseLine = None  # 最佳直线方程参数
         best_inliers = []  # 最佳内点索引列表
 
         # 使用tqdm显示RANSAC迭代进度
         with tqdm(
             total=self._iterations,
-            desc=f"直线拟合<{self._idx}-{len(self._line_equation)}>",
+            desc=f"直线拟合<{self._idx}-{len(self._line)}>",
             unit="iter",
         ) as pbar:
             for i in range(self._iterations):
@@ -192,17 +192,17 @@ class RansacLineFitter:
                     ]
                 else:
                     control_line = None
-                line = estimate_line(sample_points, control_line)
+                line_tmp = estimate_line(sample_points, control_line)
 
                 # 计算内点
-                inlier_mask = calc_inliers_line(line, pcd_data, self._threshold)
+                inlier_mask = calc_inliers_line(line_tmp, pcd_data, self._threshold)
                 idx_candidates = np.where(inlier_mask)[0]
                 inliers_ratio = len(idx_candidates) / n_points
 
                 # 如果当前内点比例大于之前的最佳比例
                 if inliers_ratio > best_inliers_ratio:
                     best_inliers_ratio = inliers_ratio
-                    # best_equation = line_params.tolist()
+                    best_line = line_tmp
                     best_inliers = idx_candidates.tolist()
 
                     # 更新进度条描述，显示当前最佳内点比例
@@ -226,7 +226,7 @@ class RansacLineFitter:
                 f"警告：只找到 {len(best_inliers)} 个内点，少于最小要求 {self._min_inliers}"
             )
 
-        return np.array(best_equation), np.array(best_inliers)
+        return best_line, np.array(best_inliers)
 
     def get_inliers(self) -> List[np.ndarray]:
         """
@@ -235,7 +235,7 @@ class RansacLineFitter:
         返回:
         List[numpy.ndarray], 内点索引列表
         """
-        if self._inliers is None:
+        if len(self._inliers) == 0:
             raise ValueError("请先调用fit方法进行直线拟合")
         return self._inliers
 
@@ -250,13 +250,13 @@ class RansacLineFitter:
             raise ValueError("请先调用fit方法进行直线拟合")
         return self._outliers
 
-    def get_line_equation(self) -> list:
+    def get_lines(self) -> list:
         """
         获取直线方程参数
 
         返回:
         list, 直线方程参数 [[cx, cy, cz, nx, ny, nz], ...]
         """
-        if self._line_equation is None:
+        if len(self._line) == 0:
             raise ValueError("请先调用fit方法进行直线拟合")
-        return self._line_equation
+        return self._line

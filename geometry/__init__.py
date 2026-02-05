@@ -1,4 +1,4 @@
-from .base_utils import project_points_to_line
+from .base_utils import project_points_to_line, distance_point_to_line
 from .line import BaseLine, CrossLine, SegmentLine
 from .plane import BasePlane
 from .point import BasePoint
@@ -12,6 +12,7 @@ from .estimate import (
 
 __all__ = [
     "project_points_to_line",
+    "distance_point_to_line",
     "BaseLine",
     "CrossLine",
     "SegmentLine",

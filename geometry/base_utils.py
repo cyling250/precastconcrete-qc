@@ -94,3 +94,24 @@ def project_points_to_line(points, P, v):
         proj_points = proj_points.squeeze(0)
 
     return proj_points
+
+
+def distance_point_to_line(
+    points: np.ndarray, P: np.ndarray, v: np.ndarray
+) -> np.ndarray:
+    """
+    计算点到直线的距离。
+
+    参数:
+    points (np.ndarray): 输入的3D点，形状为 (N, 3)。
+    P (np.ndarray): 直线上的点，形状为 (3,)。
+    v (np.ndarray): 直线的方向向量，形状为 (3,)。
+
+    返回:
+    np.ndarray: 点到直线的距离，形状为 (N,)。
+    """
+    # 计算点到直线的垂足
+    proj_point = project_points_to_line(points, P, v)
+    # 计算垂足到点的距离
+    dist = np.linalg.norm(points - proj_point, axis=1)
+    return dist

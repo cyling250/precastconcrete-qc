@@ -74,7 +74,7 @@ def estimate_plane(pts: np.ndarray) -> BasePlane:
     return BasePlane(params)
 
 
-def estimate_line(pts: np.ndarray, control_line: np.ndarray = None) -> BaseLine:
+def estimate_line(pts: np.ndarray, control_line: BaseLine = None) -> BaseLine:
     """
     估算直线模型参数，使用最小二乘法拟合点集
 
@@ -110,8 +110,8 @@ def estimate_line(pts: np.ndarray, control_line: np.ndarray = None) -> BaseLine:
     # 如果提供了控制直线，确保拟合直线与控制直线共面
     if control_line is not None:
         # 获取控制直线的参数
-        c_control = control_line[0:3]  # 控制直线上的一点
-        n_control = control_line[3:6]  # 控制直线的方向向量（已归一化）
+        c_control = control_line.parameters[0:3]  # 控制直线上的一点
+        n_control = control_line.parameters[3:6]  # 控制直线的方向向量（已归一化）
 
         # 计算共面平面的法向量：两个方向向量的叉积
         plane_normal = np.cross(n, n_control)

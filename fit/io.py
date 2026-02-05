@@ -72,7 +72,7 @@ def save_line_params(
                 np.tile(random_color, (len(current_points), 1))
             )
             # 保存直线公式
-            line_params = line_fitter.get_line_equation()
+            line_params = line_fitter.get_lines()[j].parameters
             np.save(
                 f"{output_dir}/{pcd_name}/rebar_line_params_{i}_{j}.npy", line_params
             )
