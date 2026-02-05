@@ -135,47 +135,49 @@ if __name__ == "__main__":
     o3d.visualization.draw_geometries(pcd_list)
 
     # ==============9 三维重建==============
-    logging.info("三维重建...")
-    pcds: list[o3d.geometry.PointCloud] = []
-    planes = []
+    logging.info("混凝土三维重建...")
+    concrete_pcds: list[o3d.geometry.PointCloud] = []
+    concrete_planes: list[BasePlane] = []
     # 自动遍历所有concrete_plane_params_{i}.npy文件
-    plane_param_files = glob.glob(
+    concrete_plane_param_files = glob.glob(
         f"{OUTPUT_DIR}/{PCD_NAME}/concrete_plane_params_*.npy"
     )
     for i in range(plane_count):
-        pcd_file = f"{OUTPUT_DIR}/{PCD_NAME}/concrete_inliers_{i}.ply"
-        plane_file = f"{OUTPUT_DIR}/{PCD_NAME}/concrete_plane_params_{i}.npy"
+        tmp_pcd_file = f"{OUTPUT_DIR}/{PCD_NAME}/concrete_inliers_{i}.ply"
+        tmp_plane_file = f"{OUTPUT_DIR}/{PCD_NAME}/concrete_plane_params_{i}.npy"
         # 读取点云
-        pcd = o3d.io.read_point_cloud(pcd_file)
-        pcds.append(pcd)
+        pcd = o3d.io.read_point_cloud(tmp_pcd_file)
+        concrete_pcds.append(pcd)
 
         # 读取平面参数方程
-        plane: BasePlane = BasePlane.read_from_npy(plane_file)
-        planes.append(plane)
-        logging.info(f"成功加载平面 {i}: 点云文件 {pcd_file}, 参数文件 {plane_file}")
-    logging.info(f"成功加载 {len(planes)} 个平面和对应的点云")
+        plane: BasePlane = BasePlane.read_from_npy(tmp_plane_file)
+        concrete_planes.append(plane)
+        logging.info(
+            f"成功加载混凝土平面 {i}: 点云文件 {tmp_pcd_file}, 参数文件 {tmp_plane_file}"
+        )
+    logging.info(f"成功加载 {len(concrete_planes)} 个混凝土平面和对应的点云")
 
     logging.info("计算交线...")
-    cross_lines = get_cross_lines_by_plane(pcds, planes)
-    visualize_cross_lines(cross_lines)
-    logging.info(f"交线数量: {len(cross_lines)}")
+    concrete_cross_lines = get_cross_lines_by_plane(concrete_pcds, concrete_planes)
+    visualize_cross_lines(concrete_cross_lines)
+    logging.info(f"交线数量: {len(concrete_cross_lines)}")
 
     logging.info("计算线段交点...")
-    cross_points, segment_lines = get_cross_points_by_cross_lines(
-        cross_lines, expand_list=EXAPND_LIST
+    concrete_cross_points, concrete_segment_lines = get_cross_points_by_cross_lines(
+        concrete_cross_lines, expand_list=EXAPND_LIST
     )
-    logging.info(f"交点数量: {len(cross_points)}")
+    logging.info(f"交点数量: {len(concrete_cross_points)}")
 
-    visualize_cross_lines(segment_lines)
+    visualize_cross_lines(concrete_segment_lines)
 
     with pygmsh.geo.Geometry() as geom:
         # 定义实体的顶点和棱
         geom_points, geom_lines = generate_lines_and_points(
-            cross_points, segment_lines, geom
+            concrete_cross_points, concrete_segment_lines, geom
         )
 
         # 由线环构建面
-        faces = build_face(planes, cross_lines, geom_lines, geom)
+        faces = build_face(concrete_planes, concrete_cross_lines, geom_lines, geom)
 
         # 构建闭合面环
         surf_loop = geom.add_surface_loop(faces)
