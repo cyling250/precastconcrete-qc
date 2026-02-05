@@ -4,6 +4,8 @@ from models import RansacPlaneFitter, RansacLineFitter
 from .get_part import get_concrete_part, get_rebar_part
 import open3d as o3d
 from geometry import BasePlane, calc_inliers_plane
+from utils.pcd_utils import calculate_obb_inscribed_cylinder_segment
+import logging
 
 
 def concrete_fit(
@@ -80,7 +82,7 @@ def rebar_fit(
     concrete_plane_fitter: RansacPlaneFitter,
     labels: np.ndarray,
     neighbor_features: str,
-    threshold: float = 0.006,
+    neighbot_distance: float = 0.04,
     iterations: int = 5000,
     min_inliers: int = 10,
     max_n_points: int = 10,
@@ -129,8 +131,52 @@ def rebar_fit(
             continue
         # 筛选当前聚类的点
         cluster_points = rebars_points[labels == cluster_id]
+
+        # 预拟合，目的是为了找到合适的半径
+        # 随机采样100次，选择线性度最大的那个来计算半径
+        max_linearity = -1
+        best_radius = None
+
+        for _ in range(100):
+            # 随机选择一点
+            random_idx = np.random.randint(0, len(cluster_points))
+            random_point = cluster_points[random_idx]
+            # 计算距离
+            distances = np.linalg.norm(cluster_points - random_point, axis=1)
+            neighbor_points = cluster_points[distances < neighbot_distance]
+
+            if len(neighbor_points) < 10:  # 邻域内点数太少，跳过
+                continue
+
+            # 计算线性度
+            try:
+                from utils.eigen_measures_utils import EigenMeasures
+
+                eigen_measures = EigenMeasures(neighbor_points)
+                linearity = eigen_measures.linearity
+
+                # 如果线性度更高，更新最佳结果
+                if linearity > max_linearity:
+                    max_linearity = linearity
+                    _, best_radius = calculate_obb_inscribed_cylinder_segment(
+                        neighbor_points
+                    )
+            except Exception as e:
+                logging.debug(f"计算线性度失败: {e}")
+                continue
+
+        # 如果没有找到合适的半径，使用默认值
+        if best_radius is None:
+            best_radius = 0.01  # 默认半径
+            logging.debug(f"聚类{cluster_id}使用默认半径: {best_radius}")
+        else:
+            logging.debug(
+                f"聚类{cluster_id}的最佳线性度: {max_linearity:.4f}, 邻域半径为{best_radius * 3}"
+            )
+
+        # 开始拟合
         line_fitter = RansacLineFitter(
-            threshold=threshold,
+            threshold=best_radius * 3,
             iterations=iterations,
             min_inliers=min_inliers,
             max_n_points=max_n_points,
@@ -141,129 +187,3 @@ def rebar_fit(
         line_fitter.fit(cluster_points)  # 调用RANSAC平面检测函数
         line_fitter_list.append(line_fitter)
     return line_fitter_list
-
-
-def visualize_plane_fitter(plane_fitter):
-    # 可视化
-    inliers_pcd_list = []
-    for inlier in plane_fitter.get_inliers():
-        inliers_pcd = o3d.geometry.PointCloud()
-        inliers_pcd.points = o3d.utility.Vector3dVector(inlier)
-        # 为每个点生成随机颜色
-        random_color = np.random.rand(3)  # 生成随机RGB颜色
-        inliers_pcd.colors = o3d.utility.Vector3dVector(
-            np.tile(random_color, (len(inlier), 1))
-        )
-        inliers_pcd_list.append(inliers_pcd)
-    o3d.visualization.draw_geometries(inliers_pcd_list)
-    return
-
-
-def visualize_line_fitter(line_fitter):
-    """可视化RANSAC直线拟合结果
-    Args:
-        plane_fitter (RansacLineFitter): RANSAC直线拟合器
-    """
-    inliers = line_fitter.get_inliers()
-    outliers = line_fitter.get_outliers()
-
-    # 可视化当前聚类的点云
-    linear_equation = line_fitter.get_line_equation()
-    inliers_pcd_list = []
-    line_list = []
-
-    for i, (inlier, line_eq) in enumerate(zip(inliers, linear_equation)):
-        # 创建内点点云
-        inliers_pcd = o3d.geometry.PointCloud()
-        inliers_pcd.points = o3d.utility.Vector3dVector(inlier)
-        # 为每个平面生成随机颜色
-        random_color = np.random.rand(3)  # 生成随机RGB颜色
-        inliers_pcd.colors = o3d.utility.Vector3dVector(
-            np.tile(random_color, (len(inlier), 1))
-        )
-        inliers_pcd_list.append(inliers_pcd)
-
-        # 创建直线几何体
-        cx, cy, cz, nx, ny, nz = line_eq
-
-        # 计算直线的起点和终点（基于内点的范围）
-        if len(inlier) > 0:
-            # 计算内点在直线方向上的投影坐标
-            inlier_centered = inlier - np.array([cx, cy, cz])
-            projections = np.dot(inlier_centered, np.array([nx, ny, nz]))
-            min_proj = np.min(projections)
-            max_proj = np.max(projections)
-
-            # 扩展一定范围，使直线更长
-            extension = 0.1 * (max_proj - min_proj)
-            min_proj -= extension
-            max_proj += extension
-
-            # 计算起点和终点
-            start_point = np.array([cx, cy, cz]) + min_proj * np.array([nx, ny, nz])
-            end_point = np.array([cx, cy, cz]) + max_proj * np.array([nx, ny, nz])
-
-            # 创建直线
-            line_points = np.array([start_point, end_point])
-            line = o3d.geometry.LineSet()
-            line.points = o3d.utility.Vector3dVector(line_points)
-            line.lines = o3d.utility.Vector2iVector([[0, 1]])
-            line.colors = o3d.utility.Vector3dVector([random_color])
-            line_list.append(line)
-
-    outliers_pcd = o3d.geometry.PointCloud()
-    outliers_pcd.points = o3d.utility.Vector3dVector(outliers)
-    outliers_pcd.colors = o3d.utility.Vector3dVector(
-        np.tile([0, 0, 1], (len(outliers), 1))
-    )
-
-    # 可视化点云和直线
-    o3d.visualization.draw_geometries(inliers_pcd_list + [outliers_pcd] + line_list)
-
-
-def close_rebar(line_fitter):
-    """给钢筋封口
-    Args:
-        line_fitter (RansacLineFitter): RANSAC直线拟合器
-    Returns:
-        list[np.ndarray]: 封口点云列表
-    """
-    all_point = []
-    line_equation_list = line_fitter.get_line_equation()
-    inliers_list = line_fitter.get_inliers()
-    for i in range(len(inliers_list)):
-        current_inliers = inliers_list[i]
-        if len(current_inliers) == 0:
-            continue
-
-        line_eq = line_equation_list[i]
-        cx, cy, cz, nx, ny, nz = line_eq
-        direction = np.array([nx, ny, nz])
-
-        # 计算内点在直线方向上的投影坐标
-        inlier_centered = current_inliers - np.array([cx, cy, cz])
-        projections = np.dot(inlier_centered, direction)
-        min_proj = np.min(projections)
-        max_proj = np.max(projections)
-
-        # 找到两个最远点（封头位置）
-        min_point = np.array([cx, cy, cz]) + min_proj * direction
-        max_point = np.array([cx, cy, cz]) + max_proj * direction
-
-        # 构造两个封头平面（法向量为直线方向向量）
-        # 平面1：通过min_point，法向量为direction
-        # 平面2：通过max_point，法向量为direction
-
-        # 将内点向两个平面投影
-        # 投影到min_point平面
-        projections_min = np.dot(current_inliers - min_point, direction)
-        cap_points_min = current_inliers - projections_min[:, np.newaxis] * direction
-
-        # 投影到max_point平面
-        projections_max = np.dot(current_inliers - max_point, direction)
-        cap_points_max = current_inliers - projections_max[:, np.newaxis] * direction
-
-        # 将封头点云添加到结果中
-        all_point.append(cap_points_min)
-        all_point.append(cap_points_max)
-    return all_point

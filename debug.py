@@ -113,7 +113,7 @@ if __name__ == "__main__":
         plane_fitter,
         labels,
         NEIGHBOR_FEATURES,
-        threshold=REBAR_THRESHOLD,
+        neighbot_distance=NEIBOR_DISTANCE / 1000,
         iterations=REBAR_ITERATIONS,
         min_inliers=REBAR_MIN_INLIERS,
         max_n_points=REBAR_MAX_N_POINTS,
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     visualize_cross_lines(concrete_segment_lines)
 
     logging.info("钢筋重建...")
-    rebar_params = get_rebar_param_by_line_fitter_v2(line_fitters)
+    rebar_params = get_rebar_param_by_line_fitter_v2(line_fitters, 1)
 
     with pygmsh.occ.Geometry() as geom:
         # 定义实体的顶点和棱
@@ -225,7 +225,13 @@ if __name__ == "__main__":
         )
 
     # ==============10 可视化网格==============
-    grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh.vtk")
+    grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk")
+    plotter = pv.Plotter()
+    plotter.add_mesh(grid, show_edges=True, color="white")
+    plotter.add_axes(line_width=2)
+    plotter.show()
+
+    grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
     plotter = pv.Plotter()
     plotter.add_mesh(grid, show_edges=True, color="white")
     plotter.add_axes(line_width=2)
