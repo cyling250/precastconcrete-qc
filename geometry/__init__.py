@@ -1,8 +1,14 @@
-from .base_utils import project_points_to_line, distance_point_to_line
 from .line import BaseLine, CrossLine, SegmentLine
 from .plane import BasePlane
 from .point import BasePoint
-from .geo_utils import intersect_plane, intersect_line, intersect_plane_with_pcd
+from .utils import (
+    project_points_to_line,
+    distance_point_to_line,
+    project_points_to_line_segment,
+    intersect_plane,
+    intersect_line,
+    intersect_plane_with_pcd,
+)
 from .estimate import (
     calc_inliers_plane,
     calc_inliers_line,
@@ -13,6 +19,7 @@ from .estimate import (
 __all__ = [
     "project_points_to_line",
     "distance_point_to_line",
+    "project_points_to_line_segment",
     "BaseLine",
     "CrossLine",
     "SegmentLine",

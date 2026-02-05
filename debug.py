@@ -27,9 +27,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 if __name__ == "__main__":
     # ==============0 定义参数==============
-    INPUT_FILE = "mock/res/point/prefabricated_laminated_beam.ply"  # 输入点云文件
+    # PCD_NAME = "prefabricated_laminated_beam"
+    PCD_NAME = "prefabricated_column"
+    INPUT_FILE = f"mock/res/point/{PCD_NAME}.ply"  # 输入点云文件
     OUTPUT_DIR = "output"  # 输出目录
-    PCD_NAME = "prefabricated_laminated_beam"  # "prefabricated_column"
     NEIBOR_DISTANCE = 40  # 邻域距离
     FEATURE_WEIGHTS = [
         1,  # X坐标
@@ -46,13 +47,12 @@ if __name__ == "__main__":
     ]  # 特征权重
     RANDOM_STATE = 42  # 随机种子
     # 混凝土拟合参数
-    CONCRETE_THRESHOLD = 0.001  # 阈值
+    CONCRETE_THRESHOLD = 0.01  # 阈值
     CONCRETE_ITERATIONS = 2000  # 迭代次数
-    CONCRETE_MIN_INLIERS = 10  # 最小内点数量
+    CONCRETE_MIN_INLIERS = 100  # 最小内点数量
     CONCRETE_MAX_N_POINTS = 4  # 最大点数量
-    CONCRETE_MAX_PLANE_NUM = 20  # 最大平面数量
+    CONCRETE_MAX_PLANE_NUM = 6  # 最大平面数量
     # 钢筋拟合参数
-    REBAR_THRESHOLD = 0.007  # 阈值
     REBAR_ITERATIONS = 2000  # 迭代次数
     REBAR_MIN_INLIERS = 10  # 最小内点数量
     REBAR_MAX_N_POINTS = 10  # 最大点数量
@@ -71,9 +71,12 @@ if __name__ == "__main__":
     logging.info(f"读取点云文件: {INPUT_FILE}")
     pcd = o3d.io.read_point_cloud(INPUT_FILE)
     # 添加噪声
-    # pcd = add_gaussian_noise(pcd)
+    pcd = add_gaussian_noise(pcd, std=0.005)
+    # 体素滤波
+    pcd = pcd.voxel_down_sample(voxel_size=0.005)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
+    o3d.visualization.draw_geometries([pcd])
 
     # ==============3 计算邻域特征==============
     logging.info("计算邻域特征...")
@@ -175,7 +178,7 @@ if __name__ == "__main__":
     visualize_cross_lines(concrete_segment_lines)
 
     logging.info("钢筋重建...")
-    rebar_params = get_rebar_param_by_line_fitter_v2(line_fitters, 1)
+    rebar_param_list = get_rebar_param_by_line_fitter_v2(line_fitters, 1)
 
     with pygmsh.occ.Geometry() as geom:
         # 定义实体的顶点和棱
@@ -201,38 +204,65 @@ if __name__ == "__main__":
 
     with pygmsh.occ.Geometry() as geom:
         # 按照三维圆柱添加钢筋
-        rebar_3d = []
-        for rebar_param in rebar_params:
-            segment_line, radius = rebar_param
-            # 钢筋长度
-            logging.info(f"添加钢筋 {segment_line}，半径 {radius}")
-            rebar_3d.append(
-                geom.add_cylinder(
-                    segment_line.link_points[0].location,
-                    segment_line.link_points[1].location
-                    - segment_line.link_points[0].location,
-                    radius=radius,
-                    mesh_size=radius / 2,
-                )
-            )
+        for rebar_params in rebar_param_list:
+            tmp_rebar_3d = []
+            for rebar_param in rebar_params:
+                segment_line: SegmentLine = rebar_param[0]
+                radius: float = rebar_param[1]
+
+                # 检查钢筋参数是否有效
+                if radius <= 0 or segment_line is None:
+                    logging.warning(
+                        f"跳过无效的钢筋参数: 半径={radius}, segment_line={segment_line}"
+                    )
+                    continue
+
+                # 计算钢筋长度和方向
+                start_point = segment_line.link_points[0].location
+                end_point = segment_line.link_points[1].location
+                direction = end_point - start_point
+
+                # 检查方向向量是否有效
+                if np.linalg.norm(direction) < 1e-6:
+                    logging.warning(f"跳过长度过小的钢筋: {np.linalg.norm(direction)}")
+                    continue
+
+                # 添加圆柱体
+                try:
+                    cylinder = geom.add_cylinder(
+                        start_point,
+                        direction,
+                        radius=radius,
+                        mesh_size=radius,
+                    )
+                    tmp_rebar_3d.append(cylinder)
+                    logging.debug(f"成功添加钢筋圆柱体，半径={radius:.4f}")
+                except Exception as e:
+                    logging.error(f"添加钢筋圆柱体失败: {e}")
+                    continue
+
+            # 如果有有效的钢筋实体，进行布尔并集操作
+            if len(tmp_rebar_3d) > 1:
+                # geom.boolean_union(entities=tmp_rebar_3d)
+                logging.info(f"成功合并{len(tmp_rebar_3d)}个钢筋实体")
+            elif len(tmp_rebar_3d) == 1:
+                logging.info("只有一个钢筋实体，无需并集操作")
+            else:
+                logging.warning("没有有效的钢筋实体可生成网格")
 
         # 生成网格并保存
         mesh = geom.generate_mesh()
         mesh.write(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk", file_format="vtk")
-
-        logging.info(
-            f"三维面包围体网格生成完成，文件：{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk"
-        )
+        logging.info(f"钢筋网格生成完成，文件：{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
 
     # ==============10 可视化网格==============
-    grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk")
-    plotter = pv.Plotter()
-    plotter.add_mesh(grid, show_edges=True, color="white")
-    plotter.add_axes(line_width=2)
-    plotter.show()
+    logging.info("可视化网格...")
 
-    grid = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
+    # 可视化混凝土网格
+    grid_concrete = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk")
+    grid_rebar = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
     plotter = pv.Plotter()
-    plotter.add_mesh(grid, show_edges=True, color="white")
+    plotter.add_mesh(grid_concrete, show_edges=True, color="red", opacity=0.9)
+    plotter.add_mesh(grid_rebar, show_edges=True, color="lightgray", opacity=0.7)
     plotter.add_axes(line_width=2)
     plotter.show()

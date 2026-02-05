@@ -115,3 +115,45 @@ def distance_point_to_line(
     # 计算垂足到点的距离
     dist = np.linalg.norm(points - proj_point, axis=1)
     return dist
+
+
+def project_points_to_line_segment(
+    points: np.ndarray, line: "BaseLine"
+) -> tuple["BasePoint", "BasePoint"]:
+    """
+    将点云投影到线上，并返回距离最远的两个点
+
+    参数:
+        points: np.ndarray, 输入的点云，形状为 (N, 3)
+        line: BaseLine, 线上的一个点，形状为 (3,)
+
+    返回:
+        tuple[BasePoint, BasePoint], 距离最远的两个点，形状均为 (3,)
+    """
+    if len(points) == 0:
+        raise ValueError("输入点云不能为空")
+    projected_points = project_points_to_line(
+        points, line.parameters[:3], line.parameters[3:]
+    )
+    # 计算投影参数t（点在直线方向上的投影长度）
+    t_values = line.get_point_lambda(projected_points)
+
+    # 找到最小和最大的t值对应的点
+    min_t_index = np.argmin(t_values)
+    max_t_index = np.argmax(t_values)
+
+    # 计算投影点坐标
+    min_projection_point = (
+        line.parameters[:3] + t_values[min_t_index] * line.parameters[3:]
+    )
+    max_projection_point = (
+        line.parameters[:3] + t_values[max_t_index] * line.parameters[3:]
+    )
+    from geometry.point import BasePoint
+
+    return BasePoint(min_projection_point), BasePoint(max_projection_point)
+
+
+if __name__ == "__main__":
+    from .line import BaseLine
+    from geometry.point import BasePoint

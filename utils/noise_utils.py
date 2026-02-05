@@ -11,7 +11,7 @@ import numpy as np
 import open3d as o3d
 
 
-def add_gaussian_noise(point_cloud, mean=0, std=0.005):
+def add_gaussian_noise(point_cloud, mean=0, std=0.001):
     """
     向点云每个点的坐标添加随机高斯分布的偏移量。
     特点：简单高效，适用于模拟激光雷达等传感器的随机误差。
