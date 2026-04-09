@@ -87,6 +87,7 @@ def rebar_fit(
     min_inliers: int = 10,
     max_n_points: int = 10,
     random_state: int = 42,
+    concrete_distance_threshold: float = 0.01,
     linearity_threshold: float = 0.6,
 ) -> list[RansacLineFitter]:
     """拟合钢筋点云
@@ -114,13 +115,25 @@ def rebar_fit(
     for i in range(len(concrete_inliers)):
         # 计算当前平面与所有点的距离, 筛选出距离小于阈值的点
         plane_model = concrete_plane[i]
-        inliners_mask = calc_inliers_plane(plane_model, rebars_points, 0.01)
+        inliners_mask = calc_inliers_plane(
+            plane_model, rebars_points, concrete_distance_threshold
+        )
         # 删除距离大于阈值的点
         rebars_points = rebars_points[~inliners_mask]
 
     # 3 使用欧式聚类对筛选后的点云进行聚类
     rebars_pcd = o3d.geometry.PointCloud()
     rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
+    # =============== DEBUG ===============
+    # 可视化点云
+    # 设置颜色为[233, 122, 94]
+    # 获取点云中的点数
+    num_points = len(rebars_pcd.points)
+    rebars_pcd.colors = o3d.utility.Vector3dVector(
+        np.tile([233 / 255, 122 / 255, 94 / 255], (num_points, 1))
+    )
+    o3d.visualization.draw_geometries([rebars_pcd])
+    # =============== END DEBUG ===============
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug):
         labels = np.array(rebars_pcd.cluster_dbscan(eps=0.05, min_points=10))
 

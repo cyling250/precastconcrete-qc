@@ -26,9 +26,10 @@ from geometry import BasePlane, SegmentLine
 logging.basicConfig(level=logging.DEBUG)
 
 if __name__ == "__main__":
+    DEBUG = True
     # ==============0 定义参数==============
-    # PCD_NAME = "prefabricated_laminated_beam"
-    PCD_NAME = "prefabricated_column"
+    PCD_NAME = "prefabricated_laminated_beam"
+    # PCD_NAME = "prefabricated_column"
     INPUT_FILE = f"mock/res/point/{PCD_NAME}.ply"  # 输入点云文件
     OUTPUT_DIR = "output"  # 输出目录
     NEIBOR_DISTANCE = 40  # 邻域距离
@@ -47,9 +48,9 @@ if __name__ == "__main__":
     ]  # 特征权重
     RANDOM_STATE = 42  # 随机种子
     # 混凝土拟合参数
-    CONCRETE_THRESHOLD = 0.01  # 阈值
+    CONCRETE_THRESHOLD = 0.005  # 阈值
     CONCRETE_ITERATIONS = 2000  # 迭代次数
-    CONCRETE_MIN_INLIERS = 100  # 最小内点数量
+    CONCRETE_MIN_INLIERS = 10  # 最小内点数量
     CONCRETE_MAX_N_POINTS = 4  # 最大点数量
     CONCRETE_MAX_PLANE_NUM = 6  # 最大平面数量
     # 钢筋拟合参数
@@ -71,11 +72,13 @@ if __name__ == "__main__":
     logging.info(f"读取点云文件: {INPUT_FILE}")
     pcd = o3d.io.read_point_cloud(INPUT_FILE)
     # 添加噪声
-    pcd = add_gaussian_noise(pcd, std=0.005)
+    pcd = add_gaussian_noise(pcd, std=0.001)
     # 体素滤波
     pcd = pcd.voxel_down_sample(voxel_size=0.005)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
+    # 将点云设置为灰色
+    pcd.paint_uniform_color([157 / 255, 158 / 255, 163 / 255])  # RGB: 灰色
     o3d.visualization.draw_geometries([pcd])
 
     # ==============3 计算邻域特征==============
@@ -93,6 +96,169 @@ if __name__ == "__main__":
         output_file=f"{OUTPUT_DIR}/{PCD_NAME}/cluster.ply",
         feature_weights=FEATURE_WEIGHTS,
     )
+    # ============ DEBUG: 可视化聚类结果 ==============
+    if DEBUG:
+        for label in np.unique(labels):
+            pcd_label = o3d.geometry.PointCloud()
+            pcd_label.points = o3d.utility.Vector3dVector(
+                np.array(pcd.points)[labels == label]
+            )
+            # pcd_label.colors = o3d.utility.Vector3dVector(
+            #     np.tile(
+            #         [130 / 255, 178 / 255, 154 / 255],
+            #         (np.array(pcd_label.points).shape[0], 1),
+            #     )
+            # )
+            pcd_label.colors = o3d.utility.Vector3dVector(
+                np.tile(
+                    [223 / 255, 122 / 255, 94 / 255],
+                    (np.array(pcd_label.points).shape[0], 1),
+                )
+            )
+            o3d.visualization.draw_geometries([pcd_label])
+            # 可视化邻域线性度
+
+    # ============== END DEBUG ===============
+
+    # ============== 可视化所有邻域特征 ===============
+    if DEBUG:
+        logging.info("可视化所有邻域特征...")
+        # 加载邻域特征数据
+        features_dict = np.load(NEIGHBOR_FEATURES, allow_pickle=True).item()
+
+        # 定义所有要可视化的特征
+        feature_list = [
+            "linearity",  # 线性度
+            "planarity",  # 平面度
+            "sphericity",  # 球度
+            "omnivariance",  # 各向同性
+            "anisotropy",  # 各向异性
+            "eigenentropy",  # 特征熵
+            "tortuosity",  # 曲折度
+            "curvature_change",  # 曲率变化
+        ]
+
+        # 为每个特征创建可视化
+        for feature_name in feature_list:
+            feature_data = features_dict.get(feature_name)
+            if feature_data is not None:
+                logging.info(f"可视化特征: {feature_name}")
+
+                # 创建点云对象
+                feature_pcd = o3d.geometry.PointCloud()
+                feature_pcd.points = o3d.utility.Vector3dVector(point_data_np)
+
+                # 归一化特征值到 [0, 1] 范围
+                feature_normalized = (feature_data - np.min(feature_data)) / (
+                    np.max(feature_data) - np.min(feature_data) + 1e-8
+                )
+
+                # 使用颜色映射：低值（蓝色）到高值（红色）
+                colors = np.zeros((len(feature_normalized), 3))
+
+                # 创建颜色映射：蓝色（低值）-> 绿色（中等值）-> 红色（高值）
+                for i, value in enumerate(feature_normalized):
+                    if value < 0.5:
+                        # 蓝色到绿色
+                        colors[i, 0] = 0  # R
+                        colors[i, 1] = value * 2  # G
+                        colors[i, 2] = 1 - value * 2  # B
+                    else:
+                        # 绿色到红色
+                        colors[i, 0] = (value - 0.5) * 2  # R
+                        colors[i, 1] = 1 - (value - 0.5) * 2  # G
+                        colors[i, 2] = 0  # B
+
+                feature_pcd.colors = o3d.utility.Vector3dVector(colors)
+
+                # 可视化
+                window_title = f"邻域{feature_name}可视化"
+                o3d.visualization.draw_geometries(
+                    [feature_pcd], window_name=window_title, width=1024, height=768
+                )
+
+                # 打印统计信息
+                logging.info(f"{feature_name}统计:")
+                logging.info(f"  最小值: {np.min(feature_data):.6f}")
+                logging.info(f"  最大值: {np.max(feature_data):.6f}")
+                logging.info(f"  平均值: {np.mean(feature_data):.6f}")
+                logging.info(f"  中位数: {np.median(feature_data):.6f}")
+                logging.info(f"  标准差: {np.std(feature_data):.6f}")
+
+                # 保存可视化结果
+                output_file = (
+                    f"{OUTPUT_DIR}/{PCD_NAME}/{feature_name}_visualization.ply"
+                )
+                o3d.io.write_point_cloud(output_file, feature_pcd)
+                logging.info(f"{feature_name}可视化结果已保存到: {output_file}")
+
+                # 保存特征数据为文本文件
+                stats_file = f"{OUTPUT_DIR}/{PCD_NAME}/{feature_name}_stats.txt"
+                with open(stats_file, "w", encoding="utf-8") as f:
+                    f.write(f"{feature_name}特征统计:\n")
+                    f.write(f"最小值: {np.min(feature_data):.6f}\n")
+                    f.write(f"最大值: {np.max(feature_data):.6f}\n")
+                    f.write(f"平均值: {np.mean(feature_data):.6f}\n")
+                    f.write(f"中位数: {np.median(feature_data):.6f}\n")
+                    f.write(f"标准差: {np.std(feature_data):.6f}\n")
+                    f.write(f"数据点数: {len(feature_data)}\n")
+                logging.info(f"{feature_name}统计信息已保存到: {stats_file}")
+            else:
+                logging.warning(f"邻域特征文件中未找到{feature_name}数据")
+
+        # 创建特征对比可视化（将所有特征显示在一个网格中）
+        logging.info("创建特征对比可视化...")
+        try:
+            # 创建一个包含所有特征可视化的网格
+            feature_pcds = []
+            feature_names_display = []
+
+            for feature_name in feature_list[:4]:  # 只显示前4个特征以避免窗口过多
+                feature_data = features_dict.get(feature_name)
+                if feature_data is not None:
+                    feature_pcd = o3d.geometry.PointCloud()
+                    feature_pcd.points = o3d.utility.Vector3dVector(point_data_np)
+
+                    # 归一化特征值
+                    feature_normalized = (feature_data - np.min(feature_data)) / (
+                        np.max(feature_data) - np.min(feature_data) + 1e-8
+                    )
+
+                    # 使用简单的热图颜色映射
+                    colors = np.zeros((len(feature_normalized), 3))
+                    colors[:, 0] = feature_normalized  # 红色通道
+                    colors[:, 1] = 0  # 绿色通道
+                    colors[:, 2] = 1 - feature_normalized  # 蓝色通道
+
+                    feature_pcd.colors = o3d.utility.Vector3dVector(colors)
+                    feature_pcds.append(feature_pcd)
+                    feature_names_display.append(feature_name)
+
+            # 可视化多个特征
+            if feature_pcds:
+                # 创建一个自定义可视化器
+                vis = o3d.visualization.Visualizer()
+                vis.create_window(
+                    window_name="邻域特征对比可视化", width=1600, height=900
+                )
+
+                # 添加所有点云
+                for i, pcd in enumerate(feature_pcds):
+                    vis.add_geometry(pcd)
+
+                # 设置视图
+                vis.get_render_option().point_size = 2.0
+                vis.get_render_option().background_color = np.array([0.1, 0.1, 0.1])
+
+                # 运行可视化
+                vis.run()
+                vis.destroy_window()
+
+                logging.info("特征对比可视化完成")
+        except Exception as e:
+            logging.error(f"创建特征对比可视化失败: {e}")
+
+    # ============== END 可视化所有邻域特征 ===============
 
     # ==============5 混凝土拟合==============
     logging.info("混凝土拟合...")
@@ -121,6 +287,7 @@ if __name__ == "__main__":
         min_inliers=REBAR_MIN_INLIERS,
         max_n_points=REBAR_MAX_N_POINTS,
         linearity_threshold=REBAR_LINEARITY_THRESHOLD,
+        concrete_distance_threshold=CONCRETE_THRESHOLD,
         random_state=RANDOM_STATE,
     )
     line_count = len(line_fitters)

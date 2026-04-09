@@ -69,6 +69,25 @@ class RansacPlaneFitter:
             except ValueError as e:
                 logging.debug(e)
                 break
+
+            # =============== DEBUG ===============
+            # 可视化当前拟合结果，将所有外点设置为[130, 178, 154]，将内点设置为[255, 14, 0]
+            import open3d as o3d
+
+            debug_pcd_inliers = o3d.geometry.PointCloud()
+            debug_pcd_inliers.points = o3d.utility.Vector3dVector(self._inliers[-1])
+            debug_pcd_inliers.paint_uniform_color(
+                [255 / 255, 14 / 255, 0 / 255]
+            )  # RGB: 黄色
+            debug_pcd_outliers = o3d.geometry.PointCloud()
+            debug_pcd_outliers.points = o3d.utility.Vector3dVector(self._outliers)
+            debug_pcd_outliers.paint_uniform_color(
+                [130 / 255, 178 / 255, 154 / 255]
+            )  # RGB: 灰色
+
+            o3d.visualization.draw_geometries([debug_pcd_inliers, debug_pcd_outliers])
+            # =============== END DEBUG ===============
+
             # ============停止策略============
             # 1. 找到的平面大于设定的最大平面
             # 2. 剩余内点数量不支持下一次迭代
