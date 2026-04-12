@@ -5,6 +5,7 @@ import time
 from tqdm import tqdm
 from geometry import BasePlane, estimate_plane, calc_inliers_plane
 import logging
+from utils.visualization_utils import visualize_plane_fitting_debug
 
 
 class RansacPlaneFitter:
@@ -31,6 +32,7 @@ class RansacPlaneFitter:
         max_n_points: int = 4,
         max_plane_num: int = 20,
         random_state: int | None = None,
+        debug: bool = False,
     ):
         assert max_plane_num > 0, "最大平面数量必须大于0"
         assert type(max_plane_num) == int, "最大平面数量必须为整数"  # noqa: E721
@@ -41,6 +43,7 @@ class RansacPlaneFitter:
         self._max_n_points = max_n_points
         self._max_plane_num = max_plane_num
         self._random_state = random_state
+        self._debug = debug
 
         # 拟合结果
         self._plane: List[BasePlane] = []  # 平面方程
@@ -70,23 +73,10 @@ class RansacPlaneFitter:
                 logging.debug(e)
                 break
 
-            # =============== DEBUG ===============
-            # 可视化当前拟合结果，将所有外点设置为[130, 178, 154]，将内点设置为[255, 14, 0]
-            import open3d as o3d
-
-            debug_pcd_inliers = o3d.geometry.PointCloud()
-            debug_pcd_inliers.points = o3d.utility.Vector3dVector(self._inliers[-1])
-            debug_pcd_inliers.paint_uniform_color(
-                [255 / 255, 14 / 255, 0 / 255]
-            )  # RGB: 黄色
-            debug_pcd_outliers = o3d.geometry.PointCloud()
-            debug_pcd_outliers.points = o3d.utility.Vector3dVector(self._outliers)
-            debug_pcd_outliers.paint_uniform_color(
-                [130 / 255, 178 / 255, 154 / 255]
-            )  # RGB: 灰色
-
-            o3d.visualization.draw_geometries([debug_pcd_inliers, debug_pcd_outliers])
-            # =============== END DEBUG ===============
+            # 可视化当前拟合结果
+            visualize_plane_fitting_debug(
+                self._inliers[-1], self._outliers, self._debug
+            )
 
             # ============停止策略============
             # 1. 找到的平面大于设定的最大平面

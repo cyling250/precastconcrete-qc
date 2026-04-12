@@ -108,7 +108,6 @@ def get_rebar_param_by_line_fitter(
 
 def get_rebar_param_by_line_fitter_v2(
     line_fitters: list[RansacLineFitter],
-    plane_fitter: list[RansacPlaneFitter],
     max_distance: float = 0.07,
     **kwargs,
 ) -> list[list[SegmentLine, float]]:

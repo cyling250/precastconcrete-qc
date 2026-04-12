@@ -19,6 +19,7 @@ def concrete_fit(
     max_plane_num: int = 20,
     random_state: Optional[int] = None,
     concrete_pcd: Optional[np.ndarray] = None,
+    debug: bool = False,
 ):
     """拟合混凝土点云
     Args:
@@ -46,6 +47,7 @@ def concrete_fit(
         max_n_points=max_n_points,
         max_plane_num=max_plane_num,
         random_state=random_state,
+        debug=debug,
     )
     plane_fitter.fit(concrete_pcd)  # 调用RANSAC平面检测函数
     final_plane = []

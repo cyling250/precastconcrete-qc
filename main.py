@@ -11,13 +11,13 @@ from fit.k_means import clustering
 from fit.neighbor_features import neighbor_features
 from fit.fitters import concrete_fit, rebar_fit
 from utils.noise_utils import add_gaussian_noise
-from rebuild.mesh import build_face, generate_lines_and_points
-from rebuild.concrete_topology import (
+from rebuild.topo_reconstr import build_face, generate_lines_and_points
+from rebuild.concrete_params import (
     visualize_cross_lines,
     get_cross_points_by_cross_lines,
     get_cross_lines_by_plane,
 )
-from rebuild.rebar_topology import (
+from rebuild.rebar_params import (
     get_rebar_param_by_line_fitter,
     get_rebar_param_by_line_fitter_v2,
 )
@@ -77,7 +77,8 @@ if __name__ == "__main__":
     pcd = pcd.voxel_down_sample(voxel_size=0.005)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
-    o3d.visualization.draw_geometries([pcd])
+    if DEBUG:
+        o3d.visualization.draw_geometries([pcd])
 
     # ==============3 计算邻域特征==============
     logging.info("计算邻域特征...")
