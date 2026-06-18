@@ -1,24 +1,21 @@
-import os
 import logging
-import open3d as o3d
-import numpy as np
-import pyvista as pv
+import os
 
-from fit.io import save_plane_params, save_line_params
+import numpy as np
+import open3d as o3d
+
+from fit.fitters import concrete_fit, rebar_fit
+from fit.io import save_line_params, save_plane_params
 from fit.k_means import clustering
 from fit.neighbor_features import neighbor_features
-from fit.fitters import concrete_fit, rebar_fit
+from rebuild.rebar_params import get_rebar_param_by_line_fitter_v2
+from rebuild.topo_reconstr import concrete_reconstr, rebar_reconstr
 from utils.noise_utils import add_gaussian_noise
-from rebuild.rebar_params import (
-    get_rebar_param_by_line_fitter,
-    get_rebar_param_by_line_fitter_v2,
-)
-from rebuild.topo_reconstr import concrete_reconstr
 from utils.visualization_utils import (
-    visualize_point_cloud,
     visualize_clusters,
-    visualize_neighbor_features,
     visualize_fitting_results,
+    visualize_neighbor_features,
+    visualize_point_cloud,
 )
 
 logging.basicConfig(level=logging.DEBUG)
@@ -26,8 +23,8 @@ logging.basicConfig(level=logging.DEBUG)
 if __name__ == "__main__":
     DEBUG = False
     # ==============0 定义参数==============
-    # PCD_NAME = "prefabricated_laminated_beam"
-    PCD_NAME = "prefabricated_column"
+    PCD_NAME = "prefabricated_laminated_beam"
+    # PCD_NAME = "prefabricated_column"
     INPUT_FILE = f"mock/res/point/{PCD_NAME}.ply"  # 输入点云文件
     OUTPUT_DIR = "output"  # 输出目录
     NEIBOR_DISTANCE = 40  # 邻域距离
@@ -47,16 +44,16 @@ if __name__ == "__main__":
     RANDOM_STATE = 42  # 随机种子
 
     # 混凝土拟合参数
-    CONCRETE_THRESHOLD = 0.005  # 阈值
+    CONCRETE_THRESHOLD = 0.001  # 阈值
     CONCRETE_ITERATIONS = 2000  # 迭代次数
     CONCRETE_MIN_INLIERS = 10  # 最小内点数量
-    CONCRETE_MAX_N_POINTS = 4  # 最大点数量
-    CONCRETE_MAX_PLANE_NUM = 6  # 最大平面数量
+    CONCRETE_MAX_N_POINTS = 5  # 最大点数量
+    CONCRETE_MAX_PLANE_NUM = 20  # 最大平面数量
     # 钢筋拟合参数
     REBAR_ITERATIONS = 2000  # 迭代次数
     REBAR_MIN_INLIERS = 10  # 最小内点数量
     REBAR_MAX_N_POINTS = 10  # 最大点数量
-    REBAR_LINEARITY_THRESHOLD = 0.1  # 线性度阈值
+    REBAR_LINEARITY_THRESHOLD = 0.7  # 线性度阈值
     # 三维重建参数
     EXAPND_LIST = [0, 0.01, 0.02, 0.03, 0.04, 0.05]  # 直线向外的扩展列表
 
@@ -71,9 +68,9 @@ if __name__ == "__main__":
     logging.info(f"读取点云文件: {INPUT_FILE}")
     pcd = o3d.io.read_point_cloud(INPUT_FILE)
     # 添加噪声
-    pcd = add_gaussian_noise(pcd, std=0.001)
+    # pcd = add_gaussian_noise(pcd)
     # 体素滤波
-    pcd = pcd.voxel_down_sample(voxel_size=0.005)
+    # pcd = pcd.voxel_down_sample(voxel_size=0.005)
     # 转换为 numpy 数组
     point_data_np = np.asarray(pcd.points)
     # 可视化
@@ -135,6 +132,7 @@ if __name__ == "__main__":
         linearity_threshold=REBAR_LINEARITY_THRESHOLD,
         concrete_distance_threshold=CONCRETE_THRESHOLD,
         random_state=RANDOM_STATE,
+        debug=DEBUG,
     )
     line_count = len(line_fitters)
     logging.info(f"成功拟合 {line_count} 个钢筋线")
@@ -156,18 +154,23 @@ if __name__ == "__main__":
 
     # ==============9 三维重建==============
     logging.info("混凝土三维重建...")
-    concrete_reconstr(OUTPUT_DIR, PCD_NAME, expand_list=EXAPND_LIST)
+    concrete_reconstr(
+        OUTPUT_DIR, PCD_NAME, expand_list=EXAPND_LIST, file_format="abaqus", debug=DEBUG
+    )
 
     logging.info("钢筋重建...")
     rebar_param_list = get_rebar_param_by_line_fitter_v2(line_fitters, 1)
+    rebar_reconstr(
+        OUTPUT_DIR, PCD_NAME, rebar_param_list, file_format="abaqus", debug=DEBUG
+    )
 
-    # ==============10 可视化网格==============
-    logging.info("可视化网格...")
-    # 可视化混凝土网格
-    grid_concrete = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk")
-    grid_rebar = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
-    plotter = pv.Plotter()
-    plotter.add_mesh(grid_concrete, show_edges=True, color="red", opacity=0.9)
-    plotter.add_mesh(grid_rebar, show_edges=True, color="lightgray", opacity=0.7)
-    plotter.add_axes(line_width=2)
-    plotter.show()
+    # # ==============10 可视化网格==============
+    # logging.info("可视化网格...")
+    # # 可视化混凝土网格
+    # grid_concrete = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-concrete.vtk")
+    # grid_rebar = pv.read(f"{OUTPUT_DIR}/{PCD_NAME}/mesh-rebar.vtk")
+    # plotter = pv.Plotter()
+    # plotter.add_mesh(grid_concrete, show_edges=True, color="red", opacity=0.9)
+    # plotter.add_mesh(grid_rebar, show_edges=True, color="lightgray", opacity=0.7)
+    # plotter.add_axes(line_width=2)
+    # plotter.show()

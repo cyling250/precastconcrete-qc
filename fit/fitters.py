@@ -91,6 +91,7 @@ def rebar_fit(
     random_state: int = 42,
     concrete_distance_threshold: float = 0.01,
     linearity_threshold: float = 0.6,
+    debug: bool = False,
 ) -> list[RansacLineFitter]:
     """拟合钢筋点云
     Args:
@@ -126,16 +127,15 @@ def rebar_fit(
     # 3 使用欧式聚类对筛选后的点云进行聚类
     rebars_pcd = o3d.geometry.PointCloud()
     rebars_pcd.points = o3d.utility.Vector3dVector(rebars_points)
-    # =============== DEBUG ===============
-    # 可视化点云
-    # 设置颜色为[233, 122, 94]
-    # 获取点云中的点数
-    num_points = len(rebars_pcd.points)
-    rebars_pcd.colors = o3d.utility.Vector3dVector(
-        np.tile([233 / 255, 122 / 255, 94 / 255], (num_points, 1))
-    )
-    o3d.visualization.draw_geometries([rebars_pcd])
-    # =============== END DEBUG ===============
+
+    if debug:
+        # DEBUG 可视化点云,设置颜色为[233, 122, 94]
+        num_points = len(rebars_pcd.points)
+        rebars_pcd.colors = o3d.utility.Vector3dVector(
+            np.tile([233 / 255, 122 / 255, 94 / 255], (num_points, 1))
+        )
+        o3d.visualization.draw_geometries([rebars_pcd])
+
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug):
         labels = np.array(rebars_pcd.cluster_dbscan(eps=0.05, min_points=10))
 

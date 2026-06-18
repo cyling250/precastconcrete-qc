@@ -41,12 +41,14 @@ def get_cross_lines_by_plane(
     return cross_lines
 
 
-def visualize_cross_lines(cross_lines: list[CrossLine]):
+def visualize_cross_lines(cross_lines: list[CrossLine], debug: bool = False):
     """可视化交线
 
     Args:
         cross_lines (list[CrossLine]): 交线列表
     """
+    if not debug:
+        return
     geometries = []
     for line in cross_lines:
         line_pcd = o3d.geometry.PointCloud()
@@ -115,7 +117,5 @@ def get_cross_points_by_cross_lines(
     # 数据校验，要求每个交线的连接点数量为2
     for line in segment_lines:
         if None in line.link_points:
-            raise ValueError(
-                f"交线{line}的连接点数量不为2，实际为{len(line.link_points)}"
-            )
+            raise ValueError(f"交线{line}的连接点数量不为2")
     return points, segment_lines

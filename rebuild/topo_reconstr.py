@@ -1,17 +1,29 @@
+"""
+拓扑重建模块
+
+该模块提供混凝土和钢筋的三维重建功能，生成无网格STEP几何文件，
+可直接导入Abaqus进行有限元分析。
+
+主要功能：
+1. 混凝土三维重建：基于点云平面拟合结果，重建混凝土实体几何
+2. 钢筋三维重建：基于钢筋参数，重建钢筋圆柱体几何
+3. STEP文件导出：生成Abaqus兼容的无网格几何文件
+"""
+
 from geometry import BasePoint, CrossLine, BasePlane, SegmentLine
 import pygmsh
 import numpy as np
 
 
-def calculate_loop_area(loop_lines):
+def calculate_loop_area(loop_lines: list) -> float:
     """
     计算环的面积（基于多边形面积公式）
 
     Args:
-        loop_lines (list[pygmsh.geo.Line]): 环中的线列表
+        loop_lines (list): 环中的线列表，每个元素为pygmsh.geo.Line对象
 
     Returns:
-        float: 环的面积
+        float: 环的面积，如果无法计算则返回0.0
     """
 
     # 简单计算环的面积（基于多边形面积公式）
@@ -56,13 +68,17 @@ def generate_lines_and_points(
     points: list[BasePoint],
     segment_lines: list[SegmentLine],
     geom: pygmsh.geo.Geometry,
-):
+) -> tuple[list, list]:
     """
     生成交线的点和线的几何对象
 
     Args:
-        cross_points (list[BasePoint]): 交线的交点列表
+        points (list[BasePoint]): 交线的交点列表
         segment_lines (list[SegmentLine]): 交线的列表
+        geom (pygmsh.geo.Geometry): pygmsh几何对象
+
+    Returns:
+        tuple[list, list]: (几何点列表, 几何线列表)
     """
     # 定义实体的顶点和棱
     geom_points = []  # 存储所有有效点的几何点对象 和 points中的点有序对应
@@ -89,15 +105,21 @@ def build_face(
     cross_lines: list[CrossLine],
     geom_lines: list,
     geom: pygmsh.geo.Geometry,
-):
+) -> list:
     """
     由交线构建面
 
     Args:
         planes (list[BasePlane]): 平面列表
         cross_lines (list[CrossLine]): 交线的列表
-        segment_lines (list[SegmentLine]): 线段的列表 和 cross_lines中的线有序对应
-        geom_lines (list[pygmsh.geo.Line]): 几何线的列表
+        geom_lines (list): 几何线的列表，与cross_lines中的线有序对应
+        geom (pygmsh.geo.Geometry): pygmsh几何对象
+
+    Returns:
+        list: 构建的面对象列表
+
+    Raises:
+        ValueError: 当某个平面没有找到有效环时
     """
     faces = []
     for plane in planes:
@@ -174,9 +196,10 @@ def concrete_reconstr(
     *,
     expand_list: list = None,
     file_format: str = "vtk",
+    debug: bool = False,
 ):
     """
-    混凝土三维重建
+    混凝土三维重建（导出无网格STEP几何，直接导入Abaqus）
 
     Args:
         output_dir (str): 输出目录
@@ -187,6 +210,7 @@ def concrete_reconstr(
     import logging
     import glob
     import pygmsh
+    import gmsh  # 核心：导入gmsh用于导出STEP
     from geometry import BasePlane
     from rebuild.concrete_params import (
         visualize_cross_lines,
@@ -239,30 +263,50 @@ def concrete_reconstr(
     )
     logging.info(f"交点数量: {len(concrete_cross_points)}")
 
-    with pygmsh.occ.Geometry() as geom:
-        # 定义实体的顶点和棱
-        _, geom_lines = generate_lines_and_points(
-            concrete_cross_points, concrete_segment_lines, geom
-        )
+    # ✅ 初始化Gmsh内核（必须第一步）
+    try:
+        gmsh.initialize()
+        gmsh_initialized = True
+    except Exception as e:
+        logging.error(f"Gmsh初始化失败: {e}")
+        gmsh_initialized = False
+        return
 
-        # 由线环构建面
-        faces = build_face(concrete_planes, concrete_cross_lines, geom_lines, geom)
+    # 可选：不显示Gmsh图形界面
+    gmsh.option.setNumber("General.Terminal", 1)
 
-        # 构建闭合面环
-        surf_loop = geom.add_surface_loop(faces)
+    try:
+        with pygmsh.occ.Geometry() as geom:
+            # 定义实体的顶点和棱
+            _, geom_lines = generate_lines_and_points(
+                concrete_cross_points, concrete_segment_lines, geom
+            )
 
-        # 面环围合出三维实体
-        geom.add_volume(surf_loop)
+            # 由线环构建面
+            faces = build_face(concrete_planes, concrete_cross_lines, geom_lines, geom)
 
-        # 生成网格并保存
-        mesh = geom.generate_mesh()
-        mesh.write(
-            f"{output_dir}/{pcd_name}/mesh-concrete.{file_format}",
-            file_format=file_format,
-        )
-        logging.info(
-            f"三维面包围体网格生成完成，文件：{output_dir}/{pcd_name}/mesh-concrete.{file_format}"
-        )
+            # 构建闭合面环
+            surf_loop = geom.add_surface_loop(faces)
+
+            # 面环围合出三维实体
+            geom.add_volume(surf_loop)
+
+            # 同步几何模型（必须执行，生成有效实体）
+            geom.synchronize()
+
+            # 导出无网格STEP实体（Abaqus原生支持）
+            step_file_path = f"{output_dir}/{pcd_name}/concrete_solid.step"
+            gmsh.write(step_file_path)
+            logging.info(f"无网格三维实体导出完成：{step_file_path}")
+    except Exception as e:
+        logging.error(f"混凝土三维重建过程中发生错误: {e}")
+    finally:
+        # 确保关闭gmsh内核
+        if gmsh_initialized:
+            try:
+                gmsh.finalize()
+            except Exception as e:
+                logging.warning(f"Gmsh关闭时发生错误（可忽略）: {e}")
 
 
 def rebar_reconstr(
@@ -271,9 +315,10 @@ def rebar_reconstr(
     rebar_param_list: list,
     *,
     file_format: str = "vtk",
+    debug: bool = False,
 ):
     """
-    钢筋三维重建
+    钢筋三维重建（导出无网格STEP几何，直接导入Abaqus）
 
     Args:
         output_dir (str): 输出目录
@@ -284,64 +329,88 @@ def rebar_reconstr(
     import logging
     import pygmsh
     import numpy as np
+    import gmsh  # 核心：导入gmsh用于导出STEP
     from geometry import SegmentLine
 
     logging.info("钢筋三维重建...")
 
-    with pygmsh.occ.Geometry() as geom:
-        # 按照三维圆柱添加钢筋
-        for rebar_params in rebar_param_list:
-            tmp_rebar_3d = []
-            for rebar_param in rebar_params:
-                segment_line: SegmentLine = rebar_param[0]
-                radius: float = rebar_param[1]
+    # ✅ 初始化Gmsh内核（必须第一步）
+    try:
+        gmsh.initialize()
+        gmsh_initialized = True
+    except Exception as e:
+        logging.error(f"Gmsh初始化失败: {e}")
+        gmsh_initialized = False
+        return
 
-                # 检查钢筋参数是否有效
-                if radius <= 0 or segment_line is None:
-                    logging.warning(
-                        f"跳过无效的钢筋参数: 半径={radius}, segment_line={segment_line}"
-                    )
-                    continue
+    # 可选：不显示Gmsh图形界面
+    gmsh.option.setNumber("General.Terminal", 1)
 
-                # 计算钢筋长度和方向
-                start_point = segment_line.link_points[0].location
-                end_point = segment_line.link_points[1].location
-                direction = end_point - start_point
+    try:
+        with pygmsh.occ.Geometry() as geom:
+            # 按照三维圆柱添加钢筋
+            rebar_entities = []
+            for rebar_params in rebar_param_list:
+                tmp_rebar_3d = []
+                for rebar_param in rebar_params:
+                    segment_line: SegmentLine = rebar_param[0]
+                    radius: float = rebar_param[1]
 
-                # 检查方向向量是否有效
-                if np.linalg.norm(direction) < 1e-6:
-                    logging.warning(f"跳过长度过小的钢筋: {np.linalg.norm(direction)}")
-                    continue
+                    # 检查钢筋参数是否有效
+                    if radius <= 0 or segment_line is None:
+                        logging.warning(
+                            f"跳过无效的钢筋参数: 半径={radius}, segment_line={segment_line}"
+                        )
+                        continue
 
-                # 添加圆柱体
-                try:
-                    cylinder = geom.add_cylinder(
-                        start_point,
-                        direction,
-                        radius=radius,
-                        mesh_size=radius,
-                    )
-                    tmp_rebar_3d.append(cylinder)
-                    logging.debug(f"成功添加钢筋圆柱体，半径={radius:.4f}")
-                except Exception as e:
-                    logging.error(f"添加钢筋圆柱体失败: {e}")
-                    continue
+                    # 计算钢筋长度和方向
+                    start_point = segment_line.link_points[0].location
+                    end_point = segment_line.link_points[1].location
+                    direction = end_point - start_point
 
-            # 如果有有效的钢筋实体，进行布尔并集操作
-            if len(tmp_rebar_3d) > 1:
-                # geom.boolean_union(entities=tmp_rebar_3d)
-                logging.info(f"成功合并{len(tmp_rebar_3d)}个钢筋实体")
-            elif len(tmp_rebar_3d) == 1:
-                logging.info("只有一个钢筋实体，无需并集操作")
-            else:
-                logging.warning("没有有效的钢筋实体可生成网格")
+                    # 检查方向向量是否有效
+                    if np.linalg.norm(direction) < 1e-6:
+                        logging.warning(
+                            f"跳过长度过小的钢筋: {np.linalg.norm(direction)}"
+                        )
+                        continue
 
-        # 生成网格并保存
-        mesh = geom.generate_mesh()
-        mesh.write(
-            f"{output_dir}/{pcd_name}/mesh-rebar.{file_format}",
-            file_format=file_format,
-        )
-        logging.info(
-            f"钢筋网格生成完成，文件：{output_dir}/{pcd_name}/mesh-rebar.{file_format}"
-        )
+                    # 添加圆柱体
+                    try:
+                        cylinder = geom.add_cylinder(
+                            start_point,
+                            direction,
+                            radius=radius,
+                        )
+                        tmp_rebar_3d.append(cylinder)
+                        logging.debug(f"成功添加钢筋圆柱体，半径={radius:.4f}")
+                    except Exception as e:
+                        logging.error(f"添加钢筋圆柱体失败: {e}")
+                        continue
+
+                # 如果有有效的钢筋实体，添加到总实体列表
+                if tmp_rebar_3d:
+                    rebar_entities.extend(tmp_rebar_3d)
+                    logging.info(f"成功添加{len(tmp_rebar_3d)}个钢筋实体")
+
+            if not rebar_entities:
+                logging.warning("没有有效的钢筋实体可生成")
+                return
+
+            # 同步几何模型（必须执行，生成有效实体）
+            geom.synchronize()
+
+            # 导出无网格STEP实体（Abaqus原生支持）
+            step_file_path = f"{output_dir}/{pcd_name}/rebar_solid.step"
+            gmsh.write(step_file_path)
+            logging.info(f"钢筋无网格三维实体导出完成：{step_file_path}")
+
+    except Exception as e:
+        logging.error(f"钢筋三维重建过程中发生错误: {e}")
+    finally:
+        # 确保关闭gmsh内核
+        if gmsh_initialized:
+            try:
+                gmsh.finalize()
+            except Exception as e:
+                logging.warning(f"Gmsh关闭时发生错误（可忽略）: {e}")
