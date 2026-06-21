@@ -150,6 +150,6 @@ output/
 
 abaqus/
 
-mock/compaire
-mock/point
+mock/res
 old.zip
+/checkpoints*

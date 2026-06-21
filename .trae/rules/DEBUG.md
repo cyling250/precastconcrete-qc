@@ -105,3 +105,44 @@
   ```
 - **结果**: 44 个四面体从种子生长（2 次外推），剪枝后 6 个，99.9% 点拟合，RMS=0
 - **教训**: 体基元生长算法必须同时满足拓扑附着（共享面）和几何外延（法线方向）两个约束，才能实现"从身上生长出去"的语义。法线方向无点时不能放弃，应通过外推搜索解决
+
+---
+
+## BUG-010: `compute_persistence_3d` 值索引错位 (persistence 算法返回值全部错误)
+
+- **场景**: `lib/persistence.py` 的 `compute_persistence_3d` 函数在 Hough 累加器上计算拓扑持久性
+- **根因**: `ordered_values = flat[order]` 后，循环用 `for flat_idx in order: val = ordered_values[flat_idx]`。`flat_idx` 是排序后的位置索引（如 5392），但 `ordered_values[flat_idx]` 取的是第 5392 高的值，而非 `flat[flat_idx]`。正确的写法应是 `for flat_idx, val in zip(order, ordered_values):`
+- **表现**: 累加器有清晰的峰值（最大 1392 票、148 个 bin ≥10 票），但持久性算法始终返回 0 个峰值
+- **修复**: 将循环改为 `for flat_idx, val in zip(order, ordered_values):`
+- **教训**: `np.argsort` 返回的是索引排列，对排序后的数组进行迭代时，必须用 `zip(order, ordered_values)` 配对使用，而非用索引值再次索引
+
+---
+
+## BUG-011: `compute_persistence_3d` 组分 ID 系统混用 (持久性值全为 0)
+
+- **场景**: `lib/persistence.py` 的 `compute_persistence_3d` 中组分跟踪逻辑
+- **根因**: 创建新组分时用**顺序 cid** (0, 1, 2...) 作为 `birth/death/comp_peak/comp_size` 的 key；合并时用 `uf.find()` 返回的**扁平索引**（如 12345）作为 key。两套 ID 不匹配，导致合并时写入错误条目，最终所有组分 persistence 为 0 或无法被找到
+- **表现**: `max_persistence = 0`，所有峰值被过滤，返回空列表
+- **修复**: 统一使用扁平索引作为组分 ID。`birth/death/peak/size` 数组全部用扁平索引索引。`uf.find()` 返回的 root 本身就是扁平索引，可直接作为 key 使用：
+  ```python
+  # 新组分:
+  birth[flat_idx] = val
+  peak[flat_idx] = flat_idx
+  # 合并:
+  root = uf.find(active_neighbors[0])
+  other = uf.find(nf)
+  # root 和 other 都是扁平索引，与 birth/death 用的 key 一致
+  ```
+- **教训**: Union-Find 合并邻接组分的算法中，组分 ID 必须与 Union-Find root 的 key 空间一致。用 dict 跟踪组分信息时容易混用不同的 key 空间，用数组 + 统一索引更安全
+
+---
+
+## BUG-012: Dice Loss 训练时 loss=NaN（PointNet++ 训练崩溃）
+
+- **场景**: `experiment_pointnet2_baseline.py` PointNet++ 训练
+- **根因**: Dice Loss 在极端类别不平衡下数值不稳定。当 batch 中钢筋/混凝土点数为 0 时，`union ≈ smooth → dice ≈ 1.0`，loss ≈ 0，产生无效梯度。同时 `smooth=1e-6` 过小，少数类的 Dice 系数易被平滑项主导。梯度在部分 batch 中爆炸为 NaN 后，loss.item() 返回 NaN，导致 `total_loss += NaN` 永久污染
+- **表现**: 第一个 epoch 开始 `train_loss=nan, val_loss=nan`，各 class IoU 全为 0.000，模型输出全为噪声类(0)。核心原因：
+  - loss=NaN → 梯度 NaN → 模型权重 NaN → 后续所有 batch 输出 NaN
+  - val 在没有梯度的情况下仍然产生 NaN loss（权重已被污染）
+- **修复**: ① 用 `nn.CrossEntropyLoss(weight=class_weights)` 替代 Dice Loss，class weights 按 `clip(1/(prior×3), 0.5, 5.0)` 计算；② 添加梯度裁剪 `clip_grad_norm_(max_norm=1.0)`；③ NaN loss batch 跳过（`continue`）；④ 验证中加入 NaN 保护
+- **教训**: Dice Loss 在极端不平衡 + 小 batch 下不可靠，Class-weighted CrossEntropy 更稳定。损失函数的选择必须与数据分布匹配，不能仅凭理论优越性选择。添加梯度裁剪和 NaN 防护是训练循环的必要组件
