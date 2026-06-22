@@ -35,7 +35,7 @@ console = Console()
 NUM_POINTS = 8192
 BATCH_SIZE = 8
 NUM_EPOCHS = 80
-LR = 1e-3
+LR = 5e-4
 WEIGHT_DECAY = 1e-4
 NUM_CLASSES = 3
 NUM_WORKERS = 0
@@ -140,7 +140,10 @@ def validate(model, make_val_loader, criterion):
     acc = compute_accuracy(preds, targets)
     prf = compute_precision_recall_f1(preds, targets, CLASS_NAMES)
 
-    return avg_loss, ious, acc, prf
+    # 干净 mIoU (仅混凝土+钢筋, 去除噪声干扰)
+    clean_miou = (ious["混凝土"] + ious["钢筋"]) / 2.0
+
+    return avg_loss, ious, acc, prf, clean_miou
 
 
 # ═══════════════════════════════════════════════════
@@ -167,8 +170,8 @@ def main():
         f"keep_ratio={KEEP_RATIO}"
     )
 
-    # 数据 (双缓冲: 训练 + 验证并行生成)
-    make_train_loader, make_val_loader = create_dataloaders(
+    # 数据 (双缓冲: 训练 + 验证 + 测试 并行生成)
+    make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
         NUM_POINTS, BATCH_SIZE, keep_ratio=KEEP_RATIO
     )
 
@@ -189,6 +192,7 @@ def main():
         "train_loss": [],
         "val_loss": [],
         "val_acc": [],
+        "clean_miou": [],
     }
 
     for epoch in range(1, NUM_EPOCHS + 1):
@@ -197,7 +201,7 @@ def main():
         train_loss = train_one_epoch(
             model, train_loader, criterion, optimizer, epoch, scaler
         )
-        val_loss, val_ious, val_acc, val_prf = validate(
+        val_loss, val_ious, val_acc, val_prf, clean_miou = validate(
             model, make_val_loader, criterion
         )
         scheduler.step()
@@ -209,6 +213,7 @@ def main():
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         history["val_acc"].append(val_acc)
+        history["clean_miou"].append(clean_miou)
         for k, v in _serialize_metrics(val_ious, val_prf).items():
             history.setdefault(k, []).append(v)
 
@@ -222,7 +227,7 @@ def main():
             f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
             f"val_acc={val_acc:.3f} mIoU={miou:.3f}"
         )
-        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f}")
+        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU(无噪声)={clean_miou:.3f}")
         console.print(f"    PRF: [{prf_str}]")
 
         # 保存最佳 (用 mIoU)
@@ -255,6 +260,22 @@ def main():
             console.print(
                 f"  {name}: P={m['precision']:.3f} R={m['recall']:.3f} F1={m['f1']:.3f}"
             )
+
+    # ── 测试集评估 ──
+    console.rule("[bold blue]测试集评估")
+    model.load_state_dict(ckpt["model_state"])
+    test_loss, test_ious, test_acc, test_prf, test_clean_miou = validate(
+        model, make_test_loader, criterion
+    )
+    console.print(f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} "
+                  f"mIoU={test_ious['mIoU']:.3f} | 干净mIoU={test_clean_miou:.3f}")
+    iou_str = " | ".join(f"{k}={v:.3f}" for k, v in test_ious.items() if k != "mIoU")
+    console.print(f"    IoU: [{iou_str}]  mIoU={test_ious['mIoU']:.3f}")
+    prf_str = " | ".join(
+        f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}"
+        for k, v in test_prf.items()
+    )
+    console.print(f"    PRF: [{prf_str}]")
 
     # 保存历史
     np.savez(

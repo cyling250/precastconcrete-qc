@@ -11,7 +11,7 @@
 | 输入点数          |                 8192                  |
 | Batch size        |                   8                   |
 | Epochs            |                  80                   |
-| Learning rate     |        1e-3 (AdamW + CosineAnnealingLR)        |
+| Learning rate     |        5e-4 (AdamW + CosineAnnealingLR)        |
 | Weight decay      |                 1e-4                  |
 | Gradient clipping |                  1.0                  |
 | AMP (混合精度)    |                  ✅                   |
