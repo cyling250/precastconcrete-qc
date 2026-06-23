@@ -153,3 +153,4 @@ abaqus/
 mock/res
 old.zip
 /checkpoints*
+experiments/checkpoints

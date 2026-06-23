@@ -146,3 +146,34 @@
   - val 在没有梯度的情况下仍然产生 NaN loss（权重已被污染）
 - **修复**: ① 用 `nn.CrossEntropyLoss(weight=class_weights)` 替代 Dice Loss，class weights 按 `clip(1/(prior×3), 0.5, 5.0)` 计算；② 添加梯度裁剪 `clip_grad_norm_(max_norm=1.0)`；③ NaN loss batch 跳过（`continue`）；④ 验证中加入 NaN 保护
 - **教训**: Dice Loss 在极端不平衡 + 小 batch 下不可靠，Class-weighted CrossEntropy 更稳定。损失函数的选择必须与数据分布匹配，不能仅凭理论优越性选择。添加梯度裁剪和 NaN 防护是训练循环的必要组件
+
+---
+
+## BUG-013: 验证集偶发 NaN logits 导致模型退化
+
+- **场景**: `experiment_pointnet2_baseline.py` PointNet++ 训练，Epoch 7+ 验证集 loss=NaN
+- **根因**: 三层连锁反应：① 某个验证 batch 的前向传播因输入/权重极端值产生 NaN logits；② 这些 NaN logits 被 `all_preds.append()` 收集；③ `torch.cat(all_preds)` 得到含 NaN 的张量 → `compute_iou` 等指标全部返回 0；④ 验证指标全 0 意味着 mIoU 不更新，不会保存 checkpoint；⑤ 但如果此时训练也产生了 NaN（只在 `backward` 阶段出现，被 `continue` 跳过但权重已被污染），后续所有 epoch 的验证全 NaN，模型退化到全预测"噪声"
+- **表现**: 从某个 epoch 开始，验证集 `loss=nan, val_acc=0.021, mIoU=0.007`，且后续永不恢复。噪声 recall=1.0，混凝土/钢筋 IoU=0
+- **修复**:
+  1. 验证集检测 NaN/Inf logits → 替换为 `torch.zeros_like(logits)`，防止指标污染
+  2. 训练 epoch 结束后增加 `check_nan_weights()` 检测权重健康，发现 NaN 立即终止并保留最佳 checkpoint
+  3. 优化器从 `Adam` 改为 `AdamW`（消除 L2 正则化与自适应学习率的耦合，减少数值不稳定性）
+- **教训**: ① 验证集不应该只 catch NaN loss，还必须 catch NaN logits，否则指标统计全崩；② 训练时 NaN 跳过不够，还需要事后检查权重完整性；③ AMP 混合精度下 float16 数值范围有限，极端输入值容易产生溢出；④ `torch.optim.AdamW` 的解耦权重衰减比 `Adam` 的 L2 正则化更稳定
+
+---
+
+## BUG-014: PointMLP `GeometricAffine` 输入通道数错误 (2×in_ch+3 → in_ch+3)
+
+- **场景**: `pointmlp_model.py` 的 `GeometricAffine` 模块
+- **根因**: `__init__` 中 `self.mlp` 的 `Conv2d` 声明 `in_channels=in_ch*2+3`（注释写"拼接 fi-fj 和 fj-fi 两个方向"），但 `forward` 中实际只拼接了位置差 (3) + 特征差 fj-fi (in_ch)，共 `in_ch+3` 个通道。两者不匹配
+- **表现**: 运行 PointMLP 时第一个训练 batch 报错 `RuntimeError: expected input[8, 67, 2048, 24] to have 131 channels, but got 67 channels`
+- **修复**: `nn.Conv2d(in_ch * 2 + 3, ...)` → `nn.Conv2d(in_ch + 3, ...)`
+- **教训**: 模型实现必须与 forward 实际拼接的维度一致，注释不能代替代码验证
+
+## BUG-015: PointMLP 解码器跳跃连接通道计算错误
+
+- **场景**: `pointmlp_model.py` 的 `PointMLPSeg.__init__` 中 decoder 构建
+- **根因**: `reversed(widths[:-1] + [in_channels])` 计算出 skip 通道为 `[6, 128, 64]`，但实际 `f_skips` 中存储的特征通道为 `[64(embed), 64(stage0), 128(stage1), 256(stage2)]`，decoder 按 `f_skips[-(i+2)]` 索引获取的跳过通道应为 `[128, 64, 64]`
+- **表现**: 第一个训练 batch 报错 `RuntimeError: expected input[8, 384, 512] to have 262 channels, but got 384 channels`
+- **修复**: 将 skip 通道列表改为 `list(reversed(widths[:-1])) + [widths[0]]` = `[128, 64, 64]`
+- **教训**: 编码器-解码器跳跃连接的通道数必须与各阶段实际输出特征通道严格对应，不能硬编码假设
