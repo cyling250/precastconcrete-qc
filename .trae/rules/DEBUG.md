@@ -1,5 +1,19 @@
 # BUG 记录
 
+## BUG-013: L 形叠合梁混凝土分为两截（预制与叠合层间的间隙）
+
+- **场景**: `build_l_composite_beam` 中叠合层 Y 偏移计算
+- **根因**: L 形截面居中操作用 `section[:, 1] -= section[:, 1].mean()`，居中后截面顶部 Y 坐标不再是 `wb/2`（原始坐标）。但叠合层偏移沿用 `wb / 2 + ch / 2`，与居中后的实际顶部 Y 不匹配，产生间隙
+- **表现**: 可视化时混凝土分为上下两段，中间有 ~23mm 可见空隙。间隙 = `(2*th - wb) / 6`（th=翼缘厚度, wb=腹板宽度）
+- **修复**: 用居中后截面的实际最大 Y 替代硬编码的 `wb/2`:
+  ```python
+  l_top_y = section[:, 1].max()
+  comp_con[:, 1] += l_top_y + ch / 2
+  ```
+- **教训**: 居中后的几何坐标必须通过实际计算获取，不能使用居中前的原始尺寸
+
+---
+
 ## BUG-001: T 形梁纵向钢筋 Y 坐标偏移（钢筋跑出混凝土外）
 
 - **场景**: 合成数据生成器 `build_t_beam`
@@ -170,6 +184,38 @@
 - **修复**: `nn.Conv2d(in_ch * 2 + 3, ...)` → `nn.Conv2d(in_ch + 3, ...)`
 - **教训**: 模型实现必须与 forward 实际拼接的维度一致，注释不能代替代码验证
 
+---
+
+## BUG-016: `_sample_beam_cross_section` 传参错位 - n_endface 被当 density 传入
+
+- **场景**: `_builder.py` 的 `_sample_beam_cross_section` 中端面采样
+- **根因**: `sample_polygon_surface` 第二个参数是 `density` (pts/mm²)，但 `_sample_beam_cross_section` 传入了 `n_endface`（点数），导致 `area * n_endface` 达到百万级，端面生成上百万点
+- **表现**: 梁点数异常大（~2M 而非预期 ~30K），且密度参数 DENSITY_MEDIUM 对梁不起作用
+- **修复**: 用 `endface_density = n_endface / area` 替代直接传 `n_endface`
+- **教训**: 函数接口的参数语义必须严格匹配，传 count 给 density 参数的 bug 在代码审查中不易发现
+
+---
+
+## BUG-017: 套筒轴向与构件轴向不匹配（梁套筒沿 Z 而非 X）
+
+- **场景**: `_builder.py` 中梁构件的套筒生成
+- **根因**: `generate_sleeve` 固定沿 Z 轴生成圆柱，但梁的长度轴是 X。套筒在纵筋位置（YZ 平面坐标）生成后沿 Z 延伸，与梁的 X 方向不匹配
+- **表现**: 套筒呈 Y 方向而非沿梁长方向，从端面伸出的方向错误
+- **修复**: 给 `generate_sleeve` / `generate_sleeves_for_component` 增加 `axis` 参数（0=X, 2=Z），柱用 axis=2（默认），梁用 axis=0。坐标系转换通过交换 `sample_cylinder_side` 返回的坐标轴实现
+- **教训**: 几何库函数的轴向假设必须与调用方的坐标系对齐。梁（水平）和柱（竖直）共用代码时，轴向参数化是必要设计
+
+---
+
+## BUG-018: 同一构件同时包含纵筋和套筒（违反物理约束）
+
+- **场景**: `_builder.py` 中 `with_sleeve=True` 的设计
+- **根因**: 原始设计 `with_sleeve` 布尔参数决定是否在纵筋位置附加套筒，导致同一构件同时出现纵筋（label=2）和套筒（label=3）。实际装配式构件中，套筒和纵筋是"插头与插座"的关系，同一位置二者不可并存
+- **表现**: 可视化中套筒内部同时出现红色（纵筋）和黄色（套筒）点云
+- **修复**: 将 `with_sleeve` 替换为 `variant` 参数（`"rebar"` 或 `"sleeve"`）。rebar 变体：混凝土 + 纵筋端面露头 + 箍筋，无套筒；sleeve 变体：混凝土端面挖孔 + 箍筋 + 套筒，无纵筋。数据集生成时各 50%
+- **教训**: 二选一的配筋方式比布尔开关更符合物理世界语义。训练数据中不能混入自相矛盾的模式
+
+---
+
 ## BUG-015: PointMLP 解码器跳跃连接通道计算错误
 
 - **场景**: `pointmlp_model.py` 的 `PointMLPSeg.__init__` 中 decoder 构建
@@ -177,3 +223,62 @@
 - **表现**: 第一个训练 batch 报错 `RuntimeError: expected input[8, 384, 512] to have 262 channels, but got 384 channels`
 - **修复**: 将 skip 通道列表改为 `list(reversed(widths[:-1])) + [widths[0]]` = `[128, 64, 64]`
 - **教训**: 编码器-解码器跳跃连接的通道数必须与各阶段实际输出特征通道严格对应，不能硬编码假设
+
+---
+
+## BUG-019: 箍筋坐标轴与构件轴向不匹配（梁箍筋沿 Z 而非 X）
+
+- **场景**: `_rebar.py` 的 `generate_stirrups_rect` / `generate_stirrups_polygon` 被梁 builder 调用时
+- **根因**: 箍筋函数假设截面在 XY 平面、箍筋沿 Z 轴分布（柱坐标系），输出 `[shrunk[:,0], shrunk[:,1], z_curr]`。但梁的截面在 YZ 平面，长度沿 X 轴。`z_curr`（范围 0~梁长 ~4450mm）被放入 Z 坐标，远超出混凝土包围盒 Z 范围（~[-315, 433]）
+- **表现**: 钢筋 Z 值达到 4450mm（梁长），超出混凝土 Z 范围。用户识别为"主轴方向和之前套筒错误方向一致"的异常点。L 形叠合梁中 54%（8837/16283）的钢筋点云 Z 值在 [483, 4450]
+- **修复**: 给 `generate_stirrups_rect` 和 `generate_stirrups_polygon` 增加 `axis` 参数（0=X, 2=Z 默认）。`axis=0` 时输出 `[z_curr, shrunk[:,0], shrunk[:,1]] = [X_轴向, Y_截面, Z_截面]`。更新梁 builder 传入 `axis=0`
+- **教训**: 几何库函数的轴向假设必须与调用方的坐标系对齐。当同一函数被梁（水平）和柱（竖直）共用时，轴向参数化是必要设计，不能假设所有调用方使用同一轴向
+
+---
+
+## BUG-020: `_get_rebar_positions_polygon` 凹角处纵筋重叠（shapely buffer 圆弧伪影）
+
+- **场景**: `_builder.py` 的 `_get_rebar_positions_polygon` 中 L 形柱/T 形梁截面凹角
+- **根因**: `_shrink_polygon` 使用 `shapely.buffer(-offset, resolution=8)` 内缩多边形，凹角处产生一段**圆弧**（8 个间距 5mm 的顶点）。这些顶点全部被当作独立纵筋位置，导致凹角处 8 根钢筋挤在 25mm 圆弧内完全重叠
+- **表现**: L 形柱凹角处纵筋/套筒明显比别处粗一圈。分析显示最小纵筋间距仅 **5.88mm**（直径 10mm 的钢筋），形成视觉上的"一坨"重叠
+- **修复**: 在 `_get_rebar_positions_polygon` 中增加**相邻顶点合并**步骤，跳过间距 `< cover*0.5` 的连续顶点。凹角圆弧点（间距 5mm）全部合并为 1 个点，主边端点（间距 240mm+）保持不变
+- **教训**: Shapely 的 `buffer` 操作在凹角处会产生圆弧伪影，不能直接将其顶点作为特征点使用。所有从 buffer 输出中提取几何特征的操作都必须考虑该伪影
+
+---
+
+## BUG-021: 矩形柱端面坐标错位（套筒/箍筋/钢筋均偏离正确位置）
+
+- **场景**: `_builder.py` 的 `build_rectangular_column` 中套筒、箍筋、纵筋和挖孔操作的 Z 坐标
+- **根因**: 混凝土棱柱 `sample_concrete_prism(poly, h, ...)` 居中在 z=0，端面在 `±h/2`。但 builder 中套筒端面、箍筋范围、纵筋露头、挖孔位置全部使用 `(0, h)` 而非 `(-h/2, h/2)`。表现为：
+  - 底部套筒从 z=0 向下延伸（但实际底面在 `-h/2`，差 `h/2`）
+  - 顶部套筒从 z=h 向上延伸（实际顶面在 `h/2`，差 `h/2`）
+  - 箍筋仅在 `[0, h]` 范围内（仅上半柱有箍筋）
+  - 纵筋(rebars)底部从 z=0 延伸而非 `-h/2`
+- **表现**: 整体批量检查时发现所有 10 个矩形柱 sleeve 样本 Z 方向超出混凝土 1300~2800mm（视柱高而定）。L 形柱使用 `(-half_h, half_h)` 正确无此问题
+- **修复**: 增加 `half_h = h / 2`，将所有端面坐标从 `(0, h)` 改为 `(-half_h, half_h)`：
+  ```python
+  stirrups: (0, h) → (-half_h, half_h)
+  rebars: (0, h) → (-half_h, half_h)
+  sleeve bottom: 0 → -half_h
+  sleeve top: h → half_h
+  hole removal: (0, h) → (-half_h, half_h)
+  ```
+- **教训**: 构件 builders 的坐标约定必须统一。`sample_concrete_prism` 居中对齐时，所有关联操作（箍筋、钢筋、套筒、挖孔）的 Z 范围必须使用 `±h/2`。不同 builder 间的坐标约定不一致是此类 bug 的温床
+
+---
+
+## 参数调整总结 (按规范)
+
+根据 JG/T 398-2019、JGJ 1-2014、GB 50010、GB 1499.2 等规范调整以下参数：
+
+| 参数 | 修改前 | 修改后 | 依据 |
+|------|--------|--------|------|
+| `SLEEVE_BOTTOM_DENSITY_FACTOR` | 0.7 | 5.0 | 底部点云太稀疏不可见，提高密度至每个套筒底部 ~50-125 点 |
+| `SLEEVE_MIN_COVER` (新增) | 无 | 20mm | JGJ 1-2014 §6.5.3: 预制柱套筒外壁保护层 ≥20mm |
+| `STIRRUP_DIAM_RANGE` (新增) | 硬编码 `(6,10)` | `(8, 12)` | 预制构件箍筋宜 ≥8mm |
+| 套筒保护层计算 | 固定 `CONCRETE_COVER=25` | 动态 `sid/2+6+20` | 套筒外径内缩量必须 >= 外半径 + 最小保护层 |
+| 矩形柱端面坐标 | `(0, h)` | `(-h/2, h/2)` | BUG-021 修复，与 L 形柱约定一致 |
+| `REBAR_DIAM_RANGE` `(16,32)` 连续范围 | 生成 16~32mm 任意值 (含 17.3, 19.7 等非标) | **`STANDARD_REBAR_DIAMETERS`** = [16, 18, 20, 22, 25, 28, 32] 离散标准值 | GB 1499.2-2024: 热轧带肋钢筋仅 15 种标准公称直径 |
+| `SLEEVE_INNER_DIAM_RANGE` `(25,55)` 连续范围 | 套筒内径与钢筋直径无关，独立随机 | **`SLEEVE_SPEC_MAP`**: 钢筋直径→(外径, 内径, 长度) 映射表 | JGJ 355-2015 §3.1.2: 套筒内径 ≥ d+10 (d≤25) / ≥ d+15 (d≥28) |
+| 钢筋-套筒匹配关系 | 无关联，各自独立随机 | sleeve variant 自动按钢筋直径查套筒规格 | 工程实际: 套筒规格必须与插入钢筋匹配 |
+| `CONCRETE_ROUGHNESS` (新增) | 混凝土表面完美光滑 | σ=**0.4mm** 沿法线高斯粗糙度 | 模拟真实混凝土表面微观不平整度（Open3D 估计法线） |

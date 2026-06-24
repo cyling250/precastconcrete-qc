@@ -150,7 +150,8 @@ output/
 
 abaqus/
 
-mock/res
+mock/
+old/
 old.zip
 /checkpoints*
 experiments/checkpoints

@@ -1,9 +1,7 @@
 """
 消融 A1 — 无几何特征: 输入仅 XYZ (3维), 去除 PCA 几何特征.
 
-与 Baseline 的区别:
-  - SA1 的输入通道从 6 改为 3 (不使用 geo_features)
-  - forward 时不传入 geo_features
+使用自定义 PointNet++ 变体, SA1 输入通道从 6 改为 3.
 """
 
 import os
@@ -40,10 +38,7 @@ CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, f"ablation_{TAG}")
 
 
 def _make_no_geo_model():
-    """构建 PointNet++ 变体 (3 通道输入, 仅 XYZ).
-
-    SA1 的 in_channels 从 6 改为 3 (仅 grouped_xyz).
-    """
+    """构建 PointNet++ 变体 (3 通道输入, 仅 XYZ)."""
     model = nn.Module()
     model.num_classes = NUM_CLASSES
     model.sa1 = SetAbstraction(512, 0.2, 32, 3, [32, 32, 64])
@@ -86,21 +81,17 @@ def main():
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     console.rule(f"[bold]{DESC}[/]")
 
-    # 数据
     make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
         NUM_POINTS, BATCH_SIZE, keep_ratio=0.4
     )
 
-    # 模型 (无几何特征)
     model = _make_no_geo_model()
     console.print(f"  [dim]模型参数: {count_params(model):,}[/]")
 
-    # 损失与优化器
     criterion = PerSampleWeightedCE(max_weight=15.0, noise_weight=0.5)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
-    # 训练循环
     best_miou = 0.0
     best_epoch = 0
     best_val_ious = {}
@@ -129,25 +120,19 @@ def main():
             f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
             f"val_acc={val_acc:.3f} mIoU={miou:.3f}"
         )
-        console.print(
-            f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU(无噪声)={clean_miou:.3f}"
-        )
+        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}")
 
         if miou > best_miou:
             best_miou = miou
             best_epoch = epoch
             best_val_ious = val_ious
             best_val_prf = val_prf
-            ckpt = {
-                "epoch": epoch,
-                "model_state": model.state_dict(),
+            torch.save({
+                "epoch": epoch, "model_state": model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
-                "val_acc": val_acc,
-                "val_miou": miou,
-                "val_ious": val_ious,
-                "val_prf": val_prf,
-            }
-            torch.save(ckpt, os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth"))
+                "val_acc": val_acc, "val_miou": miou,
+                "val_ious": val_ious, "val_prf": val_prf,
+            }, os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth"))
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
     # 测试集评估
@@ -159,28 +144,23 @@ def main():
         test_loss, test_ious, test_acc, test_prf, test_clean_miou = validate(
             model, make_test_loader, criterion
         )
-        console.print(
-            f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} "
-            f"mIoU={test_ious['mIoU']:.3f} | 干净mIoU={test_clean_miou:.3f}"
-        )
+        console.print(f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} mIoU={test_ious['mIoU']:.3f}")
 
-    # 保存历史与汇总
-    np.savez(
-        os.path.join(CHECKPOINT_DIR, f"history_{TAG}.npz"),
-        **{k: np.array(v) for k, v in history.items()},
-    )
+    np.savez(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.npz"),
+             **{k: np.array(v) for k, v in history.items()})
     with open(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.json"), "w") as f:
         json.dump(history, f, indent=2)
 
     summary = {
-        "tag": TAG,
-        "desc": DESC,
-        "best_epoch": best_epoch,
+        "tag": TAG, "desc": DESC, "best_epoch": best_epoch,
         "best_val_miou": best_miou,
         "best_val_noise": best_val_ious.get("噪声", 0),
         "best_val_concrete": best_val_ious.get("混凝土", 0),
         "best_val_rebar": best_val_ious.get("钢筋", 0),
-        "best_val_clean_miou": (best_val_ious.get("混凝土", 0) + best_val_ious.get("钢筋", 0)) / 2.0,
+        "best_val_sleeve": best_val_ious.get("套筒", 0),
+        "best_val_clean_miou": (best_val_ious.get("混凝土", 0) +
+                                best_val_ious.get("钢筋", 0) +
+                                best_val_ious.get("套筒", 0)) / 3.0,
     }
     with open(os.path.join(CHECKPOINT_DIR, f"summary_{TAG}.json"), "w") as f:
         json.dump(summary, f, indent=2)

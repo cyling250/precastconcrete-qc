@@ -1,5 +1,5 @@
 """
-共享训练模块: 训练循环、验证循环、种子设置、常量定义
+共享训练模块: 训练循环、验证循环、种子设置、常量定义 (4 分类)
 
 所有 experiment_*.py 文件从此模块导入公共组件, 避免代码重复.
 """
@@ -31,16 +31,16 @@ from lib.pointnet2.metrics import (
 
 console = Console()
 
-# ── 常量 ──
+# ── 常量 (4 分类) ──
 NUM_POINTS = 8192
 BATCH_SIZE = 8
 NUM_EPOCHS = 80
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
-NUM_CLASSES = 3
+NUM_CLASSES = 4
 KEEP_RATIO = 0.4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CLASS_NAMES = {0: "噪声", 1: "混凝土", 2: "钢筋"}
+CLASS_NAMES = {0: "噪声", 1: "混凝土", 2: "钢筋", 3: "套筒"}
 CHECKPOINT_BASE = os.path.join(os.path.dirname(__file__), "checkpoints")
 
 
@@ -136,7 +136,7 @@ def validate(model, make_val_loader, criterion):
     ious = compute_iou(preds, targets, CLASS_NAMES)
     acc = compute_accuracy(preds, targets)
     prf = compute_precision_recall_f1(preds, targets, CLASS_NAMES)
-    clean_miou = (ious["混凝土"] + ious["钢筋"]) / 2.0
+    clean_miou = (ious["混凝土"] + ious["钢筋"] + ious["套筒"]) / 3.0
     return avg_loss, ious, acc, prf, clean_miou
 
 
@@ -314,9 +314,12 @@ def run_experiment(
         "best_val_noise": best_val_ious.get("噪声", 0),
         "best_val_concrete": best_val_ious.get("混凝土", 0),
         "best_val_rebar": best_val_ious.get("钢筋", 0),
+        "best_val_sleeve": best_val_ious.get("套筒", 0),
         "best_val_clean_miou": (
-            best_val_ious.get("混凝土", 0) + best_val_ious.get("钢筋", 0)
-        ) / 2.0,
+            best_val_ious.get("混凝土", 0) +
+            best_val_ious.get("钢筋", 0) +
+            best_val_ious.get("套筒", 0)
+        ) / 3.0,
         **test_metrics,
     }
     with open(os.path.join(ckpt_dir, f"summary_{tag}.json"), "w") as f:
