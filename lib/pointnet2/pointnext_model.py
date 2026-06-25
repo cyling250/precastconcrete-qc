@@ -426,7 +426,10 @@ class PointNeXtSeg(nn.Module):
         # upsample from deepest back to original resolution
         decoder = []
         dec_in = self.enc_channels[-1]
-        skip_list = list(reversed(self.enc_channels[:-1])) + [in_channels]
+        # 最后一个 skip 不再用 in_channels(6), 而是投影到 32, 给 head 更多容量区分钢筋/套筒
+        dec_skip_ch = max(32, self.enc_channels[0])
+        self.proj_skip = Conv1dBN(in_channels, dec_skip_ch, act=True)  # 6→32
+        skip_list = list(reversed(self.enc_channels[:-1])) + [dec_skip_ch]
         for skip_ch in skip_list:
             mlp = [skip_ch + dec_in, skip_ch, skip_ch]
             decoder.append(PointNextFeaturePropagation(mlp))
@@ -434,7 +437,7 @@ class PointNeXtSeg(nn.Module):
         self.decoder = nn.ModuleList(decoder)
 
         # ── Head ──
-        head_in = dec_in  # channels after final decoder stage
+        head_in = dec_in  # channels after final decoder stage (now 32 instead of 6)
         self.head = nn.Sequential(
             Conv1dBN(head_in, 64, act=True),
             nn.Dropout(0.3),
@@ -477,9 +480,9 @@ class PointNeXtSeg(nn.Module):
             r_eff = None
 
         # ── Encoder forward with intermediate storage for skip ──
-        # First entry is the original resolution
+        # First entry is the original resolution (projected for richer decoder skip)
         p_skips = [p_orig]
-        f_skips = [f_orig]
+        f_skips = [self.proj_skip(f_orig)]  # project 6→32
 
         p = xyz
         for stage_idx, stage in enumerate(self.encoder):

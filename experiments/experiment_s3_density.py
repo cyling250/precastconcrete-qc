@@ -67,7 +67,7 @@ def train_or_load_model() -> torch.nn.Module:
 
     console.print("[bold]训练 Baseline 模型 (完整数据集)...[/]")
     set_seed(42)
-    make_train_loader, make_val_loader, _ = create_dataloaders(NUM_POINTS, BATCH_SIZE, keep_ratio=0.4)
+    make_train_loader, make_val_loader, _ = create_dataloaders(NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000)
 
     model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
     console.print(f"  [dim]模型参数: {count_params(model):,}[/]")

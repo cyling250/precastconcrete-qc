@@ -133,6 +133,7 @@ def validate(model, make_val_loader, criterion):
     preds = torch.cat(all_preds)
     targets = torch.cat(all_targets)
     avg_loss = total_loss / len(loader)
+
     ious = compute_iou(preds, targets, CLASS_NAMES)
     acc = compute_accuracy(preds, targets)
     prf = compute_precision_recall_f1(preds, targets, CLASS_NAMES)
@@ -166,6 +167,7 @@ def run_experiment(
     num_points: int = NUM_POINTS,
     seed: int = 42,
     checkpoint_subdir: str = None,
+    samples_per_epoch: int = None,
 ) -> dict:
     """通用实验入口: 种子 → 数据 → 模型 → 训练 → 验证 → 测试.
 
@@ -180,6 +182,7 @@ def run_experiment(
         batch_size / num_points: DataLoader 参数.
         seed: 随机种子.
         checkpoint_subdir: checkpoint 子目录, 默认 "checkpoints/{tag}".
+        samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
 
     Returns:
         summary dict: tag, desc, best_epoch, best_val_miou, best_val_ious,
@@ -203,7 +206,8 @@ def run_experiment(
 
     # ── 数据 ──
     make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
-        num_points, batch_size, keep_ratio=keep_ratio
+        num_points, batch_size, keep_ratio=keep_ratio,
+        samples_per_epoch=samples_per_epoch,
     )
 
     # ── 模型 ──

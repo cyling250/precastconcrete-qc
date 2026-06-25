@@ -8,6 +8,8 @@ def main():
         model_factory=lambda: PointNeXtSeg(num_classes=4),
         tag="baseline_pointnext",
         desc="SOTA: PointNeXt (NeurIPS 2022)",
+        batch_size=16,
+        samples_per_epoch=3000,
     )
 
 

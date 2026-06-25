@@ -96,13 +96,13 @@ NOISE_LEVELS: dict[str, dict] = {
         "occlusion_pct": 0.30,
         "jitter_sigma": 5.0,
         "keep_pct": 0.75,
-        "outlier_pct": 0.03,
+        "outlier_pct": 0.01,
     },
     "high": {
         "occlusion_pct": 0.40,
         "jitter_sigma": 8.0,
         "keep_pct": 0.65,
-        "outlier_pct": 0.05,
+        "outlier_pct": 0.02,
     },
 }
 

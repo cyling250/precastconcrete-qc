@@ -1,5 +1,15 @@
 # BUG 记录
 
+## BUG-022: PointNeXt 套筒梯度饥饿 (class 3 logits 系统性被抑制 → IoU=0)
+
+- **场景**: `pointnext_model.py` PointNeXt 训练，class 3 (套筒) 始终不被预测
+- **根因**: PointNeXt 的编码器-解码器结构导致 class 3 的 logits 在所有点上系统性低于其他类。由于梯度饥饿效应——套筒 logit 远低于其他类 → softmax 概率趋近于 0 → 交叉熵梯度趋近于 0 → logit 提升极慢（~+0.18/epoch），导致模型即使训练多个 epoch 也从未预测 class 3
+- **表现**: 验证集 `pred分布` 永远不含"套筒"，套筒 IoU=0.000，P/R/F1 全为 0。但 GT 分布确认存在套筒点
+- **修复**: 双重修复：
+  1. **bias 初始化**: 在 `_common.py` 的 `run_experiment` 中，模型初始化后找到 head 最后一层 `Conv1d(out=4)`，给 `bias[3] += 3.0`，确保初始时套筒 logits 不系统性低于其他类
+  2. **损失函数加权**: 在 `model.py` 的 `PerSampleWeightedCE` 中添加 `sleeve_weight=3.0` 参数，forward 中对 class 3 的权重额外乘 `sleeve_weight`，增强梯度信号
+- **教训**: 稀有类 + 深度架构可能产生"梯度饥饿"现象。在模型初始化时，对稀有类输出通道的 bias 添加正偏置是打破该恶性循环的有效方法。同时损失函数中给稀有类额外加权可以加速收敛。偏置值需要适当，过大（如 +3）会导致初期过度预测，需要额外 epoch 调整
+
 ## BUG-013: L 形叠合梁混凝土分为两截（预制与叠合层间的间隙）
 
 - **场景**: `build_l_composite_beam` 中叠合层 Y 偏移计算

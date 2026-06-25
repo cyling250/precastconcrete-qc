@@ -48,7 +48,7 @@ def run_single(tag: str, radius: float, desc: str) -> dict:
     ds_module.PATCH_RADIUS_MM = radius
 
     make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
-        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4
+        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000
     )
 
     model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
