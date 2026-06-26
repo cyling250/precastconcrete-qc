@@ -8,6 +8,8 @@ def main():
         model_factory=lambda: PointNetPlusPlus(num_classes=4),
         tag="baseline_pointnet2",
         desc="主试验: PointNet++ + 本文 loss + 数据预处理",
+        batch_size=16,
+        samples_per_epoch=3000,
     )
 
 
