@@ -34,7 +34,7 @@ console = Console()
 
 # ── 常量 (4 分类) ──
 NUM_POINTS = 8192
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 NUM_EPOCHS = 80
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
