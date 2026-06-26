@@ -6,6 +6,7 @@
 
 import os
 import sys
+import json
 import random
 import numpy as np
 import torch
@@ -42,6 +43,19 @@ KEEP_RATIO = 0.4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_NAMES = {0: "噪声", 1: "混凝土", 2: "钢筋", 3: "套筒"}
 CHECKPOINT_BASE = os.path.join(os.path.dirname(__file__), "checkpoints")
+
+
+def _save_history(ckpt_dir, tag, history):
+    """将 history dict 保存为 .npz 和 .json（每个 epoch 调用，即时写盘防丢失）"""
+    try:
+        np.savez(
+            os.path.join(ckpt_dir, f"history_{tag}.npz"),
+            **{k: np.array(v) for k, v in history.items()},
+        )
+        with open(os.path.join(ckpt_dir, f"history_{tag}.json"), "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] 保存历史失败: {e}")
 
 
 def set_seed(seed=42):
@@ -188,7 +202,6 @@ def run_experiment(
         summary dict: tag, desc, best_epoch, best_val_miou, best_val_ious,
                       test_ious, test_acc, 等.
     """
-    import json
 
     set_seed(seed)
     ckpt_dir = (
@@ -275,6 +288,9 @@ def run_experiment(
             torch.save(ckpt, os.path.join(ckpt_dir, f"best_{tag}.pth"))
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
+        # ── 每个 epoch 即时保存历史（防止中途失败丢失） ──
+        _save_history(ckpt_dir, tag, history)
+
     # ── 测试集评估 ──
     console.rule(f"[bold blue]{tag} 测试集评估[/]")
     ckpt_path = os.path.join(ckpt_dir, f"best_{tag}.pth")
@@ -303,12 +319,7 @@ def run_experiment(
         }
 
     # ── 保存 ──
-    np.savez(
-        os.path.join(ckpt_dir, f"history_{tag}.npz"),
-        **{k: np.array(v) for k, v in history.items()},
-    )
-    with open(os.path.join(ckpt_dir, f"history_{tag}.json"), "w") as f:
-        json.dump(history, f, indent=2)
+    _save_history(ckpt_dir, tag, history)
 
     summary = {
         "tag": tag,
