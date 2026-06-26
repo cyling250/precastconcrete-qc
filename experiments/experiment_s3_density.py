@@ -14,6 +14,7 @@ from _common import (
     NUM_POINTS, BATCH_SIZE, NUM_EPOCHS, LR, WEIGHT_DECAY,
     NUM_CLASSES, DEVICE, CHECKPOINT_BASE,
     set_seed, train_one_epoch, validate, _serialize_metrics,
+    _save_history,
     PointNetPlusPlus, create_dataloaders, PerSampleWeightedCE, count_params,
 )
 
@@ -77,6 +78,7 @@ def train_or_load_model() -> torch.nn.Module:
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
     best_miou = 0.0
+    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
     for epoch in range(1, NUM_EPOCHS + 1):
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
@@ -86,10 +88,26 @@ def train_or_load_model() -> torch.nn.Module:
         iou_str = " | ".join(f"{k}={v:.3f}" for k, v in val_ious.items() if k != "mIoU")
         console.print(f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f} mIoU={miou:.3f}")
         console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}")
+
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+        history["clean_miou"].append(clean_miou)
+        for k, v in _serialize_metrics(val_ious, val_prf).items():
+            history.setdefault(k, []).append(v)
+
         if miou > best_miou:
             best_miou = miou
-            torch.save({"epoch": epoch, "model_state": model.state_dict(), "val_miou": miou}, MODEL_CKPT)
+            torch.save({
+                "epoch": epoch, "model_state": model.state_dict(),
+                "val_miou": miou, "val_ious": val_ious, "val_prf": val_prf,
+            }, MODEL_CKPT)
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
+
+        # 每 epoch 即时保存历史
+        _save_history(CHECKPOINT_DIR, TAG, history)
+
     console.print(f"[green]模型训练完成, 最佳 val_mIoU={best_miou:.3f}[/]")
     return model
 

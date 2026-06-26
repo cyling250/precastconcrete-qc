@@ -26,6 +26,7 @@ from _common import (
     train_one_epoch,
     validate,
     _serialize_metrics,
+    _save_history,
     PointNetPlusPlus,
     create_dataloaders,
     count_params,
@@ -98,6 +99,9 @@ def main():
             }, os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth"))
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
+        # 每 epoch 即时保存历史
+        _save_history(CHECKPOINT_DIR, TAG, history)
+
     console.rule(f"[bold blue]{TAG} 测试集评估[/]")
     ckpt_path = os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth")
     if os.path.exists(ckpt_path):
@@ -108,10 +112,7 @@ def main():
         )
         console.print(f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} mIoU={test_ious['mIoU']:.3f}")
 
-    np.savez(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.npz"),
-             **{k: np.array(v) for k, v in history.items()})
-    with open(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.json"), "w") as f:
-        json.dump(history, f, indent=2)
+    _save_history(CHECKPOINT_DIR, TAG, history)
 
     summary = {
         "tag": TAG, "desc": DESC, "best_epoch": best_epoch,

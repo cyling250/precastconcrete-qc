@@ -25,6 +25,7 @@ from _common import (
     train_one_epoch,
     validate,
     _serialize_metrics,
+    _save_history,
     PointNetPlusPlus,
     create_dataloaders,
     PerSampleWeightedCE,
@@ -101,6 +102,9 @@ def run_single(tag: str, radius: float, desc: str) -> dict:
             }, os.path.join(checkpoint_dir, f"best_{tag}.pth"))
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
+        # 每 epoch 即时保存历史
+        _save_history(checkpoint_dir, tag, history)
+
     console.rule(f"[bold blue]{tag} 测试集评估[/]")
     ckpt_path = os.path.join(checkpoint_dir, f"best_{tag}.pth")
     test_metrics = {}
@@ -114,10 +118,7 @@ def run_single(tag: str, radius: float, desc: str) -> dict:
         test_metrics = {"test_loss": test_loss, "test_acc": test_acc,
                         **_serialize_metrics(test_ious, test_prf)}
 
-    np.savez(os.path.join(checkpoint_dir, f"history_{tag}.npz"),
-             **{k: np.array(v) for k, v in history.items()})
-    with open(os.path.join(checkpoint_dir, f"history_{tag}.json"), "w") as f:
-        json.dump(history, f, indent=2)
+    _save_history(checkpoint_dir, tag, history)
 
     summary = {
         "tag": tag, "radius_mm": radius, "desc": desc, "best_epoch": best_epoch,

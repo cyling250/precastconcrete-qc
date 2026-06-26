@@ -26,6 +26,7 @@ from _common import (
     train_one_epoch,
     validate,
     _serialize_metrics,
+    _save_history,
     create_dataloaders,
     count_params,
     PerSampleWeightedCE,
@@ -96,7 +97,13 @@ def main():
     best_epoch = 0
     best_val_ious = {}
     best_val_prf = {}
-    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "val_loss": [],
+        "val_acc": [],
+        "clean_miou": [],
+    }
 
     for epoch in range(1, NUM_EPOCHS + 1):
         train_loader = make_train_loader()
@@ -120,20 +127,31 @@ def main():
             f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
             f"val_acc={val_acc:.3f} mIoU={miou:.3f}"
         )
-        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}")
+        console.print(
+            f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}"
+        )
 
         if miou > best_miou:
             best_miou = miou
             best_epoch = epoch
             best_val_ious = val_ious
             best_val_prf = val_prf
-            torch.save({
-                "epoch": epoch, "model_state": model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "val_acc": val_acc, "val_miou": miou,
-                "val_ious": val_ious, "val_prf": val_prf,
-            }, os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth"))
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "val_acc": val_acc,
+                    "val_miou": miou,
+                    "val_ious": val_ious,
+                    "val_prf": val_prf,
+                },
+                os.path.join(CHECKPOINT_DIR, f"best_{TAG}.pth"),
+            )
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
+
+        # 每 epoch 即时保存历史
+        _save_history(CHECKPOINT_DIR, TAG, history)
 
     # 测试集评估
     console.rule(f"[bold blue]{TAG} 测试集评估[/]")
@@ -144,23 +162,27 @@ def main():
         test_loss, test_ious, test_acc, test_prf, test_clean_miou = validate(
             model, make_test_loader, criterion
         )
-        console.print(f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} mIoU={test_ious['mIoU']:.3f}")
+        console.print(
+            f"test_loss={test_loss:.4f} test_acc={test_acc:.3f} mIoU={test_ious['mIoU']:.3f}"
+        )
 
-    np.savez(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.npz"),
-             **{k: np.array(v) for k, v in history.items()})
-    with open(os.path.join(CHECKPOINT_DIR, f"history_{TAG}.json"), "w") as f:
-        json.dump(history, f, indent=2)
+    _save_history(CHECKPOINT_DIR, TAG, history)
 
     summary = {
-        "tag": TAG, "desc": DESC, "best_epoch": best_epoch,
+        "tag": TAG,
+        "desc": DESC,
+        "best_epoch": best_epoch,
         "best_val_miou": best_miou,
         "best_val_noise": best_val_ious.get("噪声", 0),
         "best_val_concrete": best_val_ious.get("混凝土", 0),
         "best_val_rebar": best_val_ious.get("钢筋", 0),
         "best_val_sleeve": best_val_ious.get("套筒", 0),
-        "best_val_clean_miou": (best_val_ious.get("混凝土", 0) +
-                                best_val_ious.get("钢筋", 0) +
-                                best_val_ious.get("套筒", 0)) / 3.0,
+        "best_val_clean_miou": (
+            best_val_ious.get("混凝土", 0)
+            + best_val_ious.get("钢筋", 0)
+            + best_val_ious.get("套筒", 0)
+        )
+        / 3.0,
     }
     with open(os.path.join(CHECKPOINT_DIR, f"summary_{TAG}.json"), "w") as f:
         json.dump(summary, f, indent=2)
