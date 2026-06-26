@@ -80,10 +80,12 @@ def train_or_load_model() -> torch.nn.Module:
     best_miou = 0.0
     history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
     for epoch in range(1, NUM_EPOCHS + 1):
+        if epoch > 1:
+            scheduler.step()
+
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
         val_loss, val_ious, val_acc, val_prf, clean_miou = validate(model, make_val_loader, criterion)
-        scheduler.step()
         miou = val_ious["mIoU"]
         iou_str = " | ".join(f"{k}={v:.3f}" for k, v in val_ious.items() if k != "mIoU")
         console.print(f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f} mIoU={miou:.3f}")

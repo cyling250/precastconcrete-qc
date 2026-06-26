@@ -106,12 +106,14 @@ def main():
     }
 
     for epoch in range(1, NUM_EPOCHS + 1):
+        if epoch > 1:
+            scheduler.step()
+
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
         val_loss, val_ious, val_acc, val_prf, clean_miou = validate(
             model, make_val_loader, criterion
         )
-        scheduler.step()
         miou = val_ious["mIoU"]
 
         history["epoch"].append(epoch)

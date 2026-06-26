@@ -241,12 +241,15 @@ def run_experiment(
     history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
 
     for epoch in range(1, num_epochs + 1):
+        # 现代 PyTorch: scheduler.step() 放在 epoch 开头（而非结尾）
+        if epoch > 1:
+            scheduler.step()
+
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
         val_loss, val_ious, val_acc, val_prf, clean_miou = validate(
             model, make_val_loader, criterion
         )
-        scheduler.step()
         miou = val_ious["mIoU"]
 
         history["epoch"].append(epoch)
