@@ -1,12 +1,13 @@
 """
 敏感性 S3 — 点云密度: 固定噪声=medium, 改变密度.
 
-设计: 训练一个 Baseline 模型, 在 3 个密度子集上分别评估.
+设计: 训练一个主试验模型, 在 3 个密度子集上分别评估.
 """
 
 import os
 import json
 import torch
+import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from _common import (
@@ -15,7 +16,7 @@ from _common import (
     NUM_CLASSES, DEVICE, CHECKPOINT_BASE,
     set_seed, train_one_epoch, validate, _serialize_metrics,
     _save_history,
-    PointNetPlusPlus, create_dataloaders, PerSampleWeightedCE, count_params,
+    PointNetPlusPlus, create_dataloaders, count_params,
 )
 
 TAG = "S3"
@@ -29,7 +30,7 @@ DENSITY_LEVELS = {
     },
     "density_medium": {
         "filter": lambda f: os.path.basename(f).endswith("_medium_medium.npz"),
-        "desc": "中密度 (0.01 pts/mm², Baseline)",
+        "desc": "中密度 (0.01 pts/mm², 主试验)",
     },
     "density_high": {
         "filter": lambda f: os.path.basename(f).endswith("_high_medium.npz"),
@@ -62,18 +63,20 @@ def train_or_load_model() -> torch.nn.Module:
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     if os.path.exists(MODEL_CKPT):
         console.print(f"[dim]加载已有模型: {MODEL_CKPT}[/]")
-        model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
+        model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
         model.load_state_dict(torch.load(MODEL_CKPT)["model_state"])
         return model
 
-    console.print("[bold]训练 Baseline 模型 (完整数据集)...[/]")
+    console.print("[bold]训练主试验模型 (完整数据集)...[/]")
     set_seed(42)
-    make_train_loader, make_val_loader, _ = create_dataloaders(NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000)
+    make_train_loader, make_val_loader, _ = create_dataloaders(
+        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000
+    )
 
-    model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
+    model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
     console.print(f"  [dim]模型参数: {count_params(model):,}[/]")
 
-    criterion = PerSampleWeightedCE(max_weight=15.0, noise_weight=0.5)
+    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
@@ -133,7 +136,7 @@ def main():
     console.rule("[bold]S3 — 点云密度敏感性[/]")
     console.print(f"[bold]Device:[/] {DEVICE}")
 
-    criterion = PerSampleWeightedCE(max_weight=15.0, noise_weight=0.5)
+    criterion = nn.CrossEntropyLoss()
     model = train_or_load_model()
     model.eval()
 

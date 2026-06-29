@@ -36,10 +36,11 @@ console = Console()
 NUM_POINTS = 8192
 BATCH_SIZE = 16
 NUM_EPOCHS = 80
-LR = 5e-4
+LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_CLASSES = 4
 KEEP_RATIO = 0.4
+SAMPLES_PER_EPOCH = 3000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_NAMES = {0: "噪声", 1: "混凝土", 2: "钢筋", 3: "套筒"}
 CHECKPOINT_BASE = os.path.join(os.path.dirname(__file__), "checkpoints")
@@ -181,7 +182,8 @@ def run_experiment(
     num_points: int = NUM_POINTS,
     seed: int = 42,
     checkpoint_subdir: str = None,
-    samples_per_epoch: int = None,
+    samples_per_epoch: int = SAMPLES_PER_EPOCH,
+    random_sample: bool = False,
 ) -> dict:
     """通用实验入口: 种子 → 数据 → 模型 → 训练 → 验证 → 测试.
 
@@ -197,6 +199,7 @@ def run_experiment(
         seed: 随机种子.
         checkpoint_subdir: checkpoint 子目录, 默认 "checkpoints/{tag}".
         samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
+        random_sample: 若 True, 使用纯随机采样 (A2 消融).
 
     Returns:
         summary dict: tag, desc, best_epoch, best_val_miou, best_val_ious,
@@ -221,6 +224,7 @@ def run_experiment(
     make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
         num_points, batch_size, keep_ratio=keep_ratio,
         samples_per_epoch=samples_per_epoch,
+        random_sample=random_sample,
     )
 
     # ── 模型 ──
@@ -229,7 +233,7 @@ def run_experiment(
 
     # ── 优化器 ──
     console.print(f"  [dim]AdamW: lr={lr}, weight_decay={weight_decay}[/]")
-    console.print(f"  [dim]PerSampleWeightedCE: max_weight=15.0, noise_weight=0.5[/]")
+    console.print(f"  [dim]Criterion: {type(criterion).__name__}[/]")
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 

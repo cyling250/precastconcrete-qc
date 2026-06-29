@@ -175,12 +175,17 @@ class FeaturePropagation(nn.Module):
 
 
 class PointNetPlusPlus(nn.Module):
-    """(B, N, 3) → (B, N, num_classes)."""
+    """(B, N, 3) → (B, N, num_classes).
 
-    def __init__(self, num_classes: int = 3):
+    in_channels=6: 输入为 XYZ(3ch) + 几何特征(3ch).
+    in_channels=3: 仅使用 XYZ, 忽略 geo_features.
+    """
+
+    def __init__(self, num_classes: int = 3, in_channels: int = 6):
         super().__init__()
         self.num_classes = num_classes
-        self.sa1 = SetAbstraction(512, 0.2, 32, 6, [32, 32, 64])
+        self.in_channels = in_channels
+        self.sa1 = SetAbstraction(512, 0.2, 32, in_channels, [32, 32, 64])
         self.sa2 = SetAbstraction(128, 0.4, 64, 64 + 3, [64, 64, 128])
         self.sa3 = SetAbstraction(1, None, None, 128 + 3, [128, 256, 512])
         self.fp3 = FeaturePropagation(128 + 512, [256, 256])
@@ -204,10 +209,12 @@ class PointNetPlusPlus(nn.Module):
         else:
             r1 = r2 = None
 
-        # geo_features: (B, N, 3) → (B, 3, N) 与 SA 层的 channel-first 格式对齐
-        if geo_features is not None:
-            geo_features = geo_features.transpose(-1, -2)
-        l1_xyz, l1_f = self.sa1(xyz, features=geo_features, radius_override=r1)
+        # in_channels=3 时忽略 geo_features（仅使用 XYZ）
+        if self.in_channels > 3 and geo_features is not None:
+            feat_for_sa1 = geo_features.transpose(-1, -2)
+        else:
+            feat_for_sa1 = None
+        l1_xyz, l1_f = self.sa1(xyz, features=feat_for_sa1, radius_override=r1)
         l2_xyz, l2_f = self.sa2(l1_xyz, l1_f, radius_override=r2)
         l3_xyz, l3_f = self.sa3(l2_xyz, l2_f)
 

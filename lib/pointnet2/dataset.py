@@ -155,7 +155,6 @@ class GpuCachedTrainLoader:
                 )
 
         # ── 3. 筛选: 按 pos_ratio 控制正样本patch比例 ──
-        # pos_ratio=0.4 表示含钢筋/套筒的 patch 占最终训练集的 40%
         rng.shuffle(all_patches)
         has_pos = [p for p in all_patches if p[4] > 0]
         no_pos = [p for p in all_patches if p[4] == 0]
@@ -293,6 +292,63 @@ class RandomValDataset(Dataset):
 
 
 # ═══════════════════════════════════════════════════
+#  随机采样数据集 (用于 A2 消融实验)
+# ═══════════════════════════════════════════════════
+
+
+class RandomSampleDataset(Dataset):
+    """随机采样数据集 — 无球查询, 无物理邻域约束.
+
+    对每个文件直接随机选取 num_points 个点, 归一化到单位球面.
+    用于 A2 消融实验: 验证物理感知局部块采样的必要性.
+    """
+
+    def __init__(
+        self,
+        file_paths: list,
+        num_points: int = 8192,
+        seed: int = 42,
+    ):
+        rng = np.random.default_rng(seed)
+        self.patches = []
+        for f in file_paths:
+            data = np.load(f)
+            pts = data["points"].astype(np.float32)
+            lbl = data["labels"].astype(np.int64)
+            geo = _load_geo_features(f, len(pts))
+            N = len(pts)
+
+            if N < num_points:
+                chosen = rng.choice(N, num_points, replace=True)
+            else:
+                chosen = rng.choice(N, num_points, replace=False)
+
+            patch_pts = pts[chosen]
+            center = patch_pts.mean(axis=0)
+            patch_pts = patch_pts - center
+            scale = np.max(np.linalg.norm(patch_pts, axis=1))
+            patch_pts = patch_pts / (scale + 1e-8)
+            self.patches.append((patch_pts, geo[chosen], lbl[chosen], scale))
+
+        print(
+            f"[RandomSampleDataset] {len(self.patches)} samples "
+            f"(来自 {len(file_paths)} 文件, 每文件 1 个随机块, 无物理采样)"
+        )
+
+    def __len__(self):
+        return len(self.patches)
+
+    def __getitem__(self, idx):
+        pts, geo, lbl, scale = self.patches[idx]
+        return (
+            torch.from_numpy(pts),
+            torch.from_numpy(geo),
+            torch.from_numpy(lbl),
+            torch.tensor(scale, dtype=torch.float32),
+        )
+
+
+# ═══════════════════════════════════════════════════
 #  工厂函数
 # ═══════════════════════════════════════════════════
 
@@ -306,17 +362,23 @@ def create_dataloaders(
     only_test: bool = False,
     pos_ratio: float = 0.8,
     samples_per_epoch: int = None,
+    random_sample: bool = False,
 ):
     """返回 (make_train_loader, make_val_loader, make_test_loader).
 
-    训练集: GpuCachedTrainLoader — 一次性生成全部 patches, GPU 缓存, 每 epoch 显存打乱.
-    验证/测试集: RandomValDataset — 纯随机采样, 一次性生成固定不变.
+    默认模式:
+      训练集: GpuCachedTrainLoader — 物理球查询采样 + GPU 缓存 + 类别平衡筛选.
+      验证/测试集: RandomValDataset — 固定种子物理球查询采样.
+
+    random_sample=True 模式 (A2 消融):
+      训练/验证/测试集: RandomSampleDataset — 无物理邻域约束的纯随机采样.
 
     Args:
-        file_filter: 可选过滤函数, 接收文件路径返回 bool (用于鲁棒性实验).
+        file_filter: 可选过滤函数, 接收文件路径返回 bool.
         only_test: 若 True, 仅创建测试集 (评估已保存模型时节省内存).
         pos_ratio: 含钢筋/套筒的 patch 在训练集中占比目标 (默认 0.8).
         samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
+        random_sample: 若 True, 使用纯随机采样替代物理球查询采样.
     """
     train_files = _list_npz_files(TRAIN_DIR) if not only_test else []
     val_files = _list_npz_files(VAL_DIR) if not only_test else []
@@ -330,8 +392,14 @@ def create_dataloaders(
           f"验证: {len(val_files)} 文件 | 测试: {len(test_files)} 文件")
 
     if only_test:
-        # 仅创建测试集 (评估已保存模型)
-        test_dataset = RandomValDataset(split="test", num_points=num_points, seed=seed + 200)
+        if random_sample:
+            test_dataset = RandomSampleDataset(
+                test_files, num_points, seed=seed + 200,
+            )
+        else:
+            test_dataset = RandomValDataset(
+                split="test", num_points=num_points, seed=seed + 200,
+            )
 
         def make_test_loader():
             return DataLoader(
@@ -344,31 +412,64 @@ def create_dataloaders(
 
         return make_dummy, make_dummy, make_test_loader
 
-    # 训练: GPU 缓存 (一次性生成)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader = GpuCachedTrainLoader(
-        train_files, num_points, batch_size,
-        keep_ratio=keep_ratio, seed=seed, device=device,
-        pos_ratio=pos_ratio, samples_per_epoch=samples_per_epoch,
-    )
-
-    # 验证/测试: RandomValDataset (固定不变)
-    val_dataset = RandomValDataset(split="val", num_points=num_points, seed=seed + 100)
-    test_dataset = RandomValDataset(split="test", num_points=num_points, seed=seed + 200)
-
-    def make_train_loader():
-        return train_loader
-
-    def make_val_loader():
-        return DataLoader(
-            val_dataset, batch_size=batch_size, shuffle=False,
-            num_workers=0, pin_memory=True,
+    if random_sample:
+        # ── A2 消融模式: 纯随机采样, 无物理球查询 ──
+        train_dataset = RandomSampleDataset(
+            train_files, num_points, seed=seed,
+        )
+        val_dataset = RandomSampleDataset(
+            val_files, num_points, seed=seed + 100,
+        )
+        test_dataset = RandomSampleDataset(
+            test_files, num_points, seed=seed + 200,
         )
 
-    def make_test_loader():
-        return DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False,
-            num_workers=0, pin_memory=True,
+        def make_train_loader():
+            return DataLoader(
+                train_dataset, batch_size=batch_size, shuffle=True,
+                num_workers=0, pin_memory=True,
+            )
+
+        def make_val_loader():
+            return DataLoader(
+                val_dataset, batch_size=batch_size, shuffle=False,
+                num_workers=0, pin_memory=True,
+            )
+
+        def make_test_loader():
+            return DataLoader(
+                test_dataset, batch_size=batch_size, shuffle=False,
+                num_workers=0, pin_memory=True,
+            )
+    else:
+        # ── 默认模式: 物理球查询采样 ──
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        train_loader = GpuCachedTrainLoader(
+            train_files, num_points, batch_size,
+            keep_ratio=keep_ratio, seed=seed, device=device,
+            pos_ratio=pos_ratio, samples_per_epoch=samples_per_epoch,
         )
+
+        val_dataset = RandomValDataset(
+            split="val", num_points=num_points, seed=seed + 100,
+        )
+        test_dataset = RandomValDataset(
+            split="test", num_points=num_points, seed=seed + 200,
+        )
+
+        def make_train_loader():
+            return train_loader
+
+        def make_val_loader():
+            return DataLoader(
+                val_dataset, batch_size=batch_size, shuffle=False,
+                num_workers=0, pin_memory=True,
+            )
+
+        def make_test_loader():
+            return DataLoader(
+                test_dataset, batch_size=batch_size, shuffle=False,
+                num_workers=0, pin_memory=True,
+            )
 
     return make_train_loader, make_val_loader, make_test_loader

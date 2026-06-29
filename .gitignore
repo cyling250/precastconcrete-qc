@@ -154,4 +154,5 @@ old/
 old.zip
 /checkpoints*
 experiments/checkpoints
+experiments/old_checkpoints
 scripts/

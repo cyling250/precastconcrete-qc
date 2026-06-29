@@ -1,21 +1,33 @@
 """
 敏感性 S4 — 噪声等级: 固定密度=medium, 改变噪声等级.
 
-设计: 训练一个 Baseline 模型, 在 3 个噪声子集上分别评估.
+设计: 训练一个主试验模型, 在 3 个噪声子集上分别评估.
 """
 
 import os
 import json
 import torch
+import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from _common import (
-    console,
-    NUM_POINTS, BATCH_SIZE, NUM_EPOCHS, LR, WEIGHT_DECAY,
-    NUM_CLASSES, DEVICE, CHECKPOINT_BASE,
-    set_seed, train_one_epoch, validate, _serialize_metrics,
+    NUM_POINTS,
+    BATCH_SIZE,
+    NUM_EPOCHS,
+    LR,
+    WEIGHT_DECAY,
+    NUM_CLASSES,
+    DEVICE,
+    CHECKPOINT_BASE,
+    set_seed,
+    train_one_epoch,
+    validate,
+    _serialize_metrics,
     _save_history,
-    PointNetPlusPlus, create_dataloaders, PerSampleWeightedCE, count_params,
+    PointNetPlusPlus,
+    create_dataloaders,
+    PerSampleWeightedCE,
+    count_params,
 )
 
 TAG = "S4"
@@ -41,8 +53,11 @@ NOISE_LEVELS = {
 @torch.no_grad()
 def evaluate_on_subset(model, criterion, file_filter: callable) -> dict:
     _, _, make_test_loader = create_dataloaders(
-        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4,
-        file_filter=file_filter, only_test=True,
+        NUM_POINTS,
+        BATCH_SIZE,
+        keep_ratio=0.4,
+        file_filter=file_filter,
+        only_test=True,
     )
     test_loss, test_ious, test_acc, test_prf, test_clean_miou = validate(
         model, make_test_loader, criterion
@@ -52,8 +67,10 @@ def evaluate_on_subset(model, criterion, file_filter: callable) -> dict:
         f"mIoU={test_ious['mIoU']:.3f} | 干净mIoU={test_clean_miou:.3f}"
     )
     return {
-        "test_loss": test_loss, "test_acc": test_acc,
-        "test_mIoU": test_ious["mIoU"], "test_clean_miou": test_clean_miou,
+        "test_loss": test_loss,
+        "test_acc": test_acc,
+        "test_mIoU": test_ious["mIoU"],
+        "test_clean_miou": test_clean_miou,
         **_serialize_metrics(test_ious, test_prf),
     }
 
@@ -62,15 +79,17 @@ def train_or_load_model() -> torch.nn.Module:
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     if os.path.exists(MODEL_CKPT):
         console.print(f"[dim]加载已有模型: {MODEL_CKPT}[/]")
-        model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
+        model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
         model.load_state_dict(torch.load(MODEL_CKPT)["model_state"])
         return model
 
     console.print("[bold]训练 Baseline 模型 (完整数据集)...[/]")
     set_seed(42)
-    make_train_loader, make_val_loader, _ = create_dataloaders(NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000)
+    make_train_loader, make_val_loader, _ = create_dataloaders(
+        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000
+    )
 
-    model = PointNetPlusPlus(NUM_CLASSES).to(DEVICE)
+    model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
     console.print(f"  [dim]模型参数: {count_params(model):,}[/]")
 
     criterion = PerSampleWeightedCE(max_weight=15.0, noise_weight=0.5)
@@ -78,18 +97,30 @@ def train_or_load_model() -> torch.nn.Module:
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
     best_miou = 0.0
-    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "val_loss": [],
+        "val_acc": [],
+        "clean_miou": [],
+    }
     for epoch in range(1, NUM_EPOCHS + 1):
         if epoch > 1:
             scheduler.step()
 
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
-        val_loss, val_ious, val_acc, val_prf, clean_miou = validate(model, make_val_loader, criterion)
+        val_loss, val_ious, val_acc, val_prf, clean_miou = validate(
+            model, make_val_loader, criterion
+        )
         miou = val_ious["mIoU"]
         iou_str = " | ".join(f"{k}={v:.3f}" for k, v in val_ious.items() if k != "mIoU")
-        console.print(f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f} mIoU={miou:.3f}")
-        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}")
+        console.print(
+            f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f} mIoU={miou:.3f}"
+        )
+        console.print(
+            f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}"
+        )
 
         history["epoch"].append(epoch)
         history["train_loss"].append(train_loss)
@@ -101,10 +132,16 @@ def train_or_load_model() -> torch.nn.Module:
 
         if miou > best_miou:
             best_miou = miou
-            torch.save({
-                "epoch": epoch, "model_state": model.state_dict(),
-                "val_miou": miou, "val_ious": val_ious, "val_prf": val_prf,
-            }, MODEL_CKPT)
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "val_miou": miou,
+                    "val_ious": val_ious,
+                    "val_prf": val_prf,
+                },
+                MODEL_CKPT,
+            )
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
         # 每 epoch 即时保存历史
@@ -115,6 +152,11 @@ def train_or_load_model() -> torch.nn.Module:
 
 
 def print_comparison(results: dict):
+    console.rule("[bold cyan]S4 — 噪声等级敏感性汇总[/]")
+    header = (
+        f"{'噪声':>14} | {'test_mIoU':>8} | {'噪声IoU':>8} | "
+        f"{'混凝土IoU':>8} | {'钢筋IoU':>8} | {'套筒IoU':>8} | {'干净mIoU':>8} | {'test_acc':>8}"
+    )
     console.rule("[bold cyan]S4 — 噪声等级敏感性汇总[/]")
     header = (f"{'噪声':>14} | {'test_mIoU':>8} | {'噪声IoU':>8} | "
               f"{'混凝土IoU':>8} | {'钢筋IoU':>8} | {'套筒IoU':>8} | {'干净mIoU':>8} | {'test_acc':>8}")
@@ -133,7 +175,7 @@ def main():
     console.rule("[bold]S4 — 噪声等级敏感性[/]")
     console.print(f"[bold]Device:[/] {DEVICE}")
 
-    criterion = PerSampleWeightedCE(max_weight=15.0, noise_weight=0.5)
+    criterion = nn.CrossEntropyLoss()
     model = train_or_load_model()
     model.eval()
 
