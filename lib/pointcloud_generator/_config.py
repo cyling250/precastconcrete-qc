@@ -87,24 +87,49 @@ SLEEVE_SPEC_MAP: dict[float, tuple[float, float, float]] = {
 # ─── 噪声默认参数 ──────────────────────────────────────────
 NOISE_LEVELS: dict[str, dict] = {
     "low": {
-        "occlusion_pct": 0.20,
-        "jitter_sigma": 2.0,
-        "keep_pct": 0.85,
-        "outlier_pct": 0.01,
+        "occlusion_pct_range": (0.10, 0.25),
+        "jitter_sigma_range": (1.0, 3.0),
+        "keep_pct_range": (0.82, 0.92),
+        "outlier_pct_range": (0.02, 0.05),
+        "cluster_outlier_pct_range": (0.01, 0.03),
+        "edge_noise_pct_range": (0.01, 0.02),
+        "n_occlusion_polygons": (1, 2),
+        "n_occlusion_sides": (3, 5),
     },
     "medium": {
-        "occlusion_pct": 0.30,
-        "jitter_sigma": 5.0,
-        "keep_pct": 0.75,
-        "outlier_pct": 0.01,
+        "occlusion_pct_range": (0.20, 0.40),
+        "jitter_sigma_range": (3.0, 7.0),
+        "keep_pct_range": (0.70, 0.82),
+        "outlier_pct_range": (0.03, 0.10),
+        "cluster_outlier_pct_range": (0.01, 0.05),
+        "edge_noise_pct_range": (0.01, 0.03),
+        "n_occlusion_polygons": (1, 3),
+        "n_occlusion_sides": (4, 6),
     },
     "high": {
-        "occlusion_pct": 0.40,
-        "jitter_sigma": 8.0,
-        "keep_pct": 0.65,
-        "outlier_pct": 0.02,
+        "occlusion_pct_range": (0.30, 0.50),
+        "jitter_sigma_range": (5.0, 10.0),
+        "keep_pct_range": (0.60, 0.72),
+        "outlier_pct_range": (0.05, 0.15),
+        "cluster_outlier_pct_range": (0.02, 0.08),
+        "edge_noise_pct_range": (0.02, 0.05),
+        "n_occlusion_polygons": (2, 4),
+        "n_occlusion_sides": (4, 7),
     },
 }
+
+# ─── 非均匀密度参数 ──────────────────────────────────────
+DENSITY_VARIATION_N_ZONES: tuple[int, int] = (2, 4)     # 密度分区数
+DENSITY_VARIATION_FACTOR_RANGE: tuple[float, float] = (0.75, 1.25)  # 每区密度系数范围
+
+# ─── 结构性噪点参数 ──────────────────────────────────────
+CLUSTER_OUTLIER_N_CLUSTERS: tuple[int, int] = (3, 8)    # 噪点簇数
+CLUSTER_OUTLIER_SPREAD: tuple[float, float] = (10.0, 50.0)  # 簇半径范围 (mm)
+
+# ─── 边缘噪点参数 ────────────────────────────────────────
+EDGE_NOISE_SEARCH_RADIUS: float = 8.0                   # 边缘搜索半径 (mm)
+EDGE_NOISE_JITTER_SIGMA: float = 3.0                    # 边缘抖动幅度 (mm)
+EDGE_NOISE_LABEL_FLIP_PROB: float = 0.15                # 边缘标签翻转概率
 
 # ─── 构件几何参数范围 ──────────────────────────────────
 COLUMN_WIDTH_RANGE: tuple[float, float] = (400.0, 800.0)

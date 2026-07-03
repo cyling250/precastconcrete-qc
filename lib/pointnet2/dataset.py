@@ -72,6 +72,32 @@ class GpuCachedTrainLoader:
         self._device = device
         self._samples_per_epoch = samples_per_epoch
 
+        # ── 检查磁盘缓存 ──
+        # 缓存文件以 seed + 关键参数命名, 避免不同配置冲突
+        cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
+        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
+        cache_path = os.path.join(cache_dir, cache_name)
+        _loaded_from_cache = False
+
+        if os.path.exists(cache_path):
+            _t0 = time.time()
+            state = torch.load(cache_path, map_location=device, weights_only=False)
+            self.pts = state["pts"].to(device, non_blocking=True)
+            self.geo = state["geo"].to(device, non_blocking=True)
+            self.lbl = state["lbl"].to(device, non_blocking=True)
+            self.scale = state["scale"].to(device, non_blocking=True)
+            self.N_per_epoch = len(self.pts)
+            mb = (self.pts.numel() + self.geo.numel() + self.lbl.numel()) * 4 / 1024 / 1024
+            print(f"  [缓存] 从 {cache_path} 加载 {self.N_per_epoch} patches ({mb:.0f}MB, {time.time()-_t0:.0f}s)")
+            _loaded_from_cache = True
+
+        if not _loaded_from_cache:
+            self._generate_patches(file_paths, num_points, keep_ratio, seed, device, pos_ratio)
+
+        self._loaded_from_cache = _loaded_from_cache
+
+    def _generate_patches(self, file_paths, num_points, keep_ratio, seed, device, pos_ratio):
+        """生成 patches 并缓存到磁盘 + GPU."""
         rng = np.random.default_rng(seed)
 
         # ── 1. 加载全部文件 + 建 KDTree ──
@@ -188,6 +214,19 @@ class GpuCachedTrainLoader:
         mb = (self.pts.numel() + self.geo.numel() + self.lbl.numel()) * 4 / 1024 / 1024
         print(f"  [GPU] {self.N_per_epoch} patches {mb:.0f}MB → {device} ({time.time()-_t0:.0f}s)")
 
+        # ── 5. 保存磁盘缓存 ──
+        _t0 = time.time()
+        cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
+        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
+        cache_path = os.path.join(cache_dir, cache_name)
+        torch.save({
+            "pts": self.pts.cpu(),
+            "geo": self.geo.cpu(),
+            "lbl": self.lbl.cpu(),
+            "scale": self.scale.cpu(),
+        }, cache_path)
+        print(f"  [缓存] 保存至 {cache_path} ({time.time()-_t0:.0f}s)")
+
     def __iter__(self):
         n_use = self._samples_per_epoch if self._samples_per_epoch else self.N_per_epoch
         n_use = min(n_use, self.N_per_epoch)
@@ -223,6 +262,21 @@ class RandomValDataset(Dataset):
         data_dir = VAL_DIR if split == "val" else TEST_DIR
         file_paths = _list_npz_files(data_dir)
         self.num_points = num_points
+
+        # ── 检查磁盘缓存 ──
+        cache_name = f".val_cache_{split}_s{seed}_n{num_points}.pt"
+        cache_path = os.path.join(data_dir, cache_name)
+        if os.path.exists(cache_path):
+            _t0 = time.time()
+            state = torch.load(cache_path, weights_only=False)
+            self.pts = state["pts"]
+            self.geo = state["geo"]
+            self.lbl = state["lbl"]
+            self.scale = state["scale"]
+            n = len(self.pts)
+            self.patches = list(range(n))  # dummy list for __len__
+            print(f"  [缓存] {split}: {n} patches 已加载 ({time.time()-_t0:.0f}s)")
+            return
 
         rng = np.random.default_rng(seed)
         self.patches = []
@@ -278,10 +332,23 @@ class RandomValDataset(Dataset):
             f"(来自 {len(file_paths)} 文件, 一次性生成固定不变)"
         )
 
+        # ── 保存磁盘缓存 ──
+        cache_path = os.path.join(data_dir, cache_name)
+        pts_t = torch.stack([torch.from_numpy(p[0]) for p in self.patches])
+        geo_t = torch.stack([torch.from_numpy(p[1]) for p in self.patches])
+        lbl_t = torch.stack([torch.from_numpy(p[2]) for p in self.patches])
+        scale_t = torch.tensor([p[3] for p in self.patches], dtype=torch.float32)
+        torch.save({"pts": pts_t, "geo": geo_t, "lbl": lbl_t, "scale": scale_t}, cache_path)
+        print(f"  [缓存] 保存至 {cache_path}")
+
     def __len__(self):
         return len(self.patches)
 
     def __getitem__(self, idx):
+        # 磁盘缓存模式: 从 tensor 直接取
+        if hasattr(self, "pts") and isinstance(self.patches[0], int):
+            return (self.pts[idx], self.geo[idx], self.lbl[idx], self.scale[idx])
+        # 生成模式: 从 patches 列表取
         pts, geo, lbl, scale = self.patches[idx]
         return (
             torch.from_numpy(pts),
@@ -300,6 +367,7 @@ class RandomSampleDataset(Dataset):
     """随机采样数据集 — 无球查询, 无物理邻域约束.
 
     对每个文件直接随机选取 num_points 个点, 归一化到单位球面.
+    每文件生成 num_samples_per_file 个随机块, 使总 patch 数与基线一致.
     用于 A2 消融实验: 验证物理感知局部块采样的必要性.
     """
 
@@ -308,6 +376,7 @@ class RandomSampleDataset(Dataset):
         file_paths: list,
         num_points: int = 8192,
         seed: int = 42,
+        num_samples_per_file: int = 5,
     ):
         rng = np.random.default_rng(seed)
         self.patches = []
@@ -318,21 +387,22 @@ class RandomSampleDataset(Dataset):
             geo = _load_geo_features(f, len(pts))
             N = len(pts)
 
-            if N < num_points:
-                chosen = rng.choice(N, num_points, replace=True)
-            else:
-                chosen = rng.choice(N, num_points, replace=False)
+            for _ in range(num_samples_per_file):
+                if N < num_points:
+                    chosen = rng.choice(N, num_points, replace=True)
+                else:
+                    chosen = rng.choice(N, num_points, replace=False)
 
-            patch_pts = pts[chosen]
-            center = patch_pts.mean(axis=0)
-            patch_pts = patch_pts - center
-            scale = np.max(np.linalg.norm(patch_pts, axis=1))
-            patch_pts = patch_pts / (scale + 1e-8)
-            self.patches.append((patch_pts, geo[chosen], lbl[chosen], scale))
+                patch_pts = pts[chosen]
+                center = patch_pts.mean(axis=0)
+                patch_pts = patch_pts - center
+                scale = np.max(np.linalg.norm(patch_pts, axis=1))
+                patch_pts = patch_pts / (scale + 1e-8)
+                self.patches.append((patch_pts, geo[chosen], lbl[chosen], scale))
 
         print(
             f"[RandomSampleDataset] {len(self.patches)} samples "
-            f"(来自 {len(file_paths)} 文件, 每文件 1 个随机块, 无物理采样)"
+            f"(来自 {len(file_paths)} 文件, 每文件 {num_samples_per_file} 个随机块, 无物理采样)"
         )
 
     def __len__(self):

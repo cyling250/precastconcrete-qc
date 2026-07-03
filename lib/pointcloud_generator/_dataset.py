@@ -30,7 +30,7 @@ from ._config import (
     MOCK_DIR, ORIGIN_DIR, ADD_NOISE_DIR,
     TRAIN_DIR, VAL_DIR, TEST_DIR,
 )
-from ._noise import apply_noise
+from ._noise import apply_noise, apply_density_variation
 from ._builder import BUILDERS, _filter_internal_rebar
 
 _CONSOLE = Console()
@@ -81,9 +81,13 @@ def _generate_and_augment_single(args: tuple) -> list[dict]:
     result["points"], result["labels"] = _filter_internal_rebar(
         result["points"], result["labels"]
     )
-    
-    origin_pts = result["points"].copy()
-    origin_labels = result["labels"].copy()
+
+    # 非均匀密度变化 (模拟扫描距离导致的密度差异)
+    pts_var, lbls_var = apply_density_variation(
+        result["points"], result["labels"], rng,
+    )
+    origin_pts = pts_var.copy()
+    origin_labels = lbls_var.copy()
     metadata = result["metadata"]
     
     outputs = []

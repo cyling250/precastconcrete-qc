@@ -1,5 +1,28 @@
 # BUG 记录
 
+## BUG-024: Phase 1 (S1) 使用自定义 Stage1Model 导致 3 类性能劣于 A1 的 4 类 (不合理)
+
+- **场景**: `experiment_phase1.py` 级联管线 S1 三分类训练
+- **根因**: 原始 Phase 1 使用 `Stage1Model`（自定义 cascade 架构），而非与 A1 实验相同的标准 `PointNetPlusPlus`。`Stage1Model` 的架构设计、初始化策略与 A1 的 `FixedRadiusPointNetPlusPlus` 不同，导致 3 类分割（噪声/混凝土/金属）效果反而不如 A1 的 4 类分割（噪声/混凝土/钢筋/套筒）
+- **表现**: S1 噪声 IoU=0.77, 混凝土 IoU=0.97, 金属 IoU=0.88；而 A1 4 分类即使分割更难的套筒也能达到 IoU=0.80，钢筋 IoU=0.89。3 类比 4 类差，违反直觉
+- **修复**: 彻底重构：
+  1. 删除 `experiment_phase2.py`（S2 代码）和 cascade 模块引用
+  2. 删除 `checkpoints/cascade/` 下所有 checkpoint
+  3. 从 `lib/pointnet2/__init__.py` 移除 cascade 导入
+  4. 重写 `experiment_phase1.py`：继承 A1 的 `FixedRadiusPointNetPlusPlus` 模式，使用 `PointNetPlusPlus(num_classes=3, in_channels=3)` + `scale=None`（固定半径 0.2/0.4）+ `nn.CrossEntropyLoss()` + 标签映射 `3→2`
+- **教训**: 级联管线 S1 本质上与 A1 实验解决的相同（3 类 vs 4 类都区分"金属"），应当共享相同的骨干架构和训练策略。不要为级联管线设计独立的模型，应复用已验证有效的基线架构
+
+## BUG-023: 级联管线 V3 Stage 1 head 随机初始化导致 Stage 2 永不触发 (rebar/sleeve IoU=0)
+
+- **场景**: `experiment_phase1.py` 和 `experiment_phase2.py` 的级联管线 V3 推理
+- **根因**: `best_s1.pth` 只保存了 `stage1_backbone.state_dict()`，没有保存 `stage1_head.state_dict()`。Phase 2 加载时 `stage1_head` 保持随机初始化。V3 的 `forward()` 使用随机 head 的预测结果来过滤点 → 预测的 metal 点数量为 0 → `len(metal_idx)==0` 导致所有样本跳过 → Stage 2 永不执行 → `out` 张量的 class 2(钢筋) 和 class 3(套筒) 通道始终相等（都来自随机 head 的金属 logit）→ argmax 永远选不到 2 或 3 → IoU=0
+- **表现**: `experiment_phase2.py` 中 V3 在 80 个 epoch 中仅在第 5 epoch 记录到一次 mIoU=0.112（噪声=0.125, 混凝土=0.324, 钢筋=0.0, 套筒=0.0），其余 epoch V3 mIoU=0。V2（教师强制，不使用 Stage 1 head）正常，mIoU=0.838
+- **确认**: 调试脚本扫描 128 个验证样本，100% 被跳过（`n_metal_raw=0`），`Rebar 被 S1 识别为金属 = 0/43785=0.000`。`best_cascade.pth` 正确保存了 head（含 `s1_head` 键），但 `best_s1.pth` 不含 head
+- **修复**: 
+  1. `experiment_phase1.py` line 136: `torch.save(model.stage1_backbone.state_dict(), ...)` → 改为保存 `{"backbone": ..., "head": ...}` 或 `model.state_dict()` 的子集
+  2. `experiment_phase2.py` line 165: 加载时同时加载 `stage1_head` 权重
+- **教训**: 多模块模型的 checkpoint 必须保存所有模块的权重，不能遗漏 head/decoder。训练管线（Phase 1 → Phase 2 → V3）中每个阶段的 checkpoint 必须保证推理时所有使用到的组件都有正确的权重。`best_cascade.pth`（最佳组合权重）是完整的，但中间 checkpoint `best_s1.pth` 缺失了 head
+
 ## BUG-022: PointNeXt 套筒梯度饥饿 (class 3 logits 系统性被抑制 → IoU=0)
 
 - **场景**: `pointnext_model.py` PointNeXt 训练，class 3 (套筒) 始终不被预测
