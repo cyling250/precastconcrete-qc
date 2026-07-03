@@ -18,6 +18,11 @@ import numpy as np
 from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from rich.progress import (
+    Progress, BarColumn, TextColumn, TimeRemainingColumn, SpinnerColumn,
+)
+from rich.console import Console
+
 from ._config import (
     LABEL_CONCRETE, LABEL_REBAR, LABEL_SLEEVE,
     DENSITY_MAP, NUM_VARIANTS_PER_TYPE,
@@ -25,8 +30,10 @@ from ._config import (
     MOCK_DIR, ORIGIN_DIR, ADD_NOISE_DIR,
     TRAIN_DIR, VAL_DIR, TEST_DIR,
 )
-from ._noise import apply_noise
+from ._noise import apply_noise, apply_density_variation
 from ._builder import BUILDERS, _filter_internal_rebar
+
+_CONSOLE = Console()
 
 
 # ─── 辅助函数（可序列化，供多进程调用）────────────────────
@@ -74,9 +81,13 @@ def _generate_and_augment_single(args: tuple) -> list[dict]:
     result["points"], result["labels"] = _filter_internal_rebar(
         result["points"], result["labels"]
     )
-    
-    origin_pts = result["points"].copy()
-    origin_labels = result["labels"].copy()
+
+    # 非均匀密度变化 (模拟扫描距离导致的密度差异)
+    pts_var, lbls_var = apply_density_variation(
+        result["points"], result["labels"], rng,
+    )
+    origin_pts = pts_var.copy()
+    origin_labels = lbls_var.copy()
     metadata = result["metadata"]
     
     outputs = []
@@ -239,26 +250,53 @@ class DatasetGenerator:
                         tasks.append(task)
                         seed += 1
         
+        n_total = len(tasks)
         all_outputs = []
         
         if num_workers <= 1:
             # 单进程模式：Open3D 不支持 Windows spawn 子进程
-            for task in tasks:
-                try:
-                    outputs = _generate_and_augment_single(task)
-                    all_outputs.extend(outputs)
-                except Exception as e:
-                    print(f"  生成失败 {task[0]} v{task[1]} ({task[2]}): {e}")
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold]生成点云[/]"),
+                BarColumn(),
+                TextColumn("{task.completed}/{task.total}"),
+                TextColumn("{task.fields[info]}"),
+                TimeRemainingColumn(),
+                console=_CONSOLE,
+            )
+            with progress:
+                task_id = progress.add_task(
+                    "生成", total=n_total, info=""
+                )
+                for task in tasks:
+                    comp_type, vi, variant, dens_name, dens_val, _, _ = task
+                    try:
+                        outputs = _generate_and_augment_single(task)
+                        all_outputs.extend(outputs)
+                        progress.update(
+                            task_id, advance=1,
+                            info=f"{comp_type} v{vi:03d} {variant} {dens_name}",
+                        )
+                    except Exception as e:
+                        progress.update(
+                            task_id, advance=1,
+                            info=f"[red]失败 {comp_type} v{vi}: {e}[/]",
+                        )
         else:
+            # 多进程模式：使用文本进度输出
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
                 futures = {executor.submit(_generate_and_augment_single, t): t for t in tasks}
+                done_count = 0
                 for future in as_completed(futures):
                     try:
                         outputs = future.result()
                         all_outputs.extend(outputs)
                     except Exception as e:
                         task_info = futures[future]
-                        print(f"  生成失败 {task_info[0]} v{task_info[1]}: {e}")
+                        _CONSOLE.print(f"  [red]生成失败 {task_info[0]} v{task_info[1]}: {e}[/]")
+                    done_count += 1
+                    if done_count % 10 == 0 or done_count == n_total:
+                        _CONSOLE.print(f"  [dim]进度: {done_count}/{n_total}[/]")
         
         return all_outputs
     
@@ -266,13 +304,30 @@ class DatasetGenerator:
         """保存原始和噪声数据到对应目录。"""
         origin_files, noise_files = [], []
         
-        for out in outputs:
-            if out["noise_level"] == "clean":
-                fpath = _save_npz(out, self.origin_dir)
-                origin_files.append(fpath)
-            else:
-                fpath = _save_npz(out, self.noise_dir)
-                noise_files.append(fpath)
+        n_total = len(outputs)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]保存文件[/]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TextColumn("{task.fields[info]}"),
+            TimeRemainingColumn(),
+            console=_CONSOLE,
+        )
+        with progress:
+            task_id = progress.add_task("保存", total=n_total, info="")
+            for out in outputs:
+                if out["noise_level"] == "clean":
+                    fpath = _save_npz(out, self.origin_dir)
+                    origin_files.append(fpath)
+                else:
+                    fpath = _save_npz(out, self.noise_dir)
+                    noise_files.append(fpath)
+                comp = out["comp_type"]
+                progress.update(
+                    task_id, advance=1,
+                    info=f"{comp} {out['noise_level']}",
+                )
         
         return origin_files, noise_files
     
@@ -289,6 +344,7 @@ class DatasetGenerator:
             groups[key].append(out)
         
         unique_keys = list(groups.keys())
+        _CONSOLE.print(f"  拆分: {len(unique_keys)} 组 → train/val/test ({self.split_ratio})")
         rng = np.random.default_rng(42)
         rng.shuffle(unique_keys)
         
@@ -302,16 +358,36 @@ class DatasetGenerator:
         
         train_files, val_files, test_files = [], [], []
         
-        for out in noisy_outputs:
-            key = (out["comp_type"], out["variant_idx"])
-            if key in train_keys:
-                fpath = _save_npz(out, self.train_dir)
-                train_files.append(fpath)
-            elif key in val_keys:
-                fpath = _save_npz(out, self.val_dir)
-                val_files.append(fpath)
-            elif key in test_keys:
-                fpath = _save_npz(out, self.test_dir)
-                test_files.append(fpath)
+        n_to_save = len(noisy_outputs)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]拆分保存[/]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TextColumn("{task.fields[info]}"),
+            TimeRemainingColumn(),
+            console=_CONSOLE,
+        )
+        with progress:
+            task_id = progress.add_task("拆分", total=n_to_save, info="")
+            for out in noisy_outputs:
+                key = (out["comp_type"], out["variant_idx"])
+                dest = "?"
+                if key in train_keys:
+                    fpath = _save_npz(out, self.train_dir)
+                    train_files.append(fpath)
+                    dest = "train"
+                elif key in val_keys:
+                    fpath = _save_npz(out, self.val_dir)
+                    val_files.append(fpath)
+                    dest = "val"
+                elif key in test_keys:
+                    fpath = _save_npz(out, self.test_dir)
+                    test_files.append(fpath)
+                    dest = "test"
+                progress.update(
+                    task_id, advance=1,
+                    info=f"{out['comp_type']} → {dest}",
+                )
         
         return train_files, val_files, test_files

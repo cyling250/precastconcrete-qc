@@ -6,6 +6,7 @@
 
 import os
 import sys
+import json
 import random
 import numpy as np
 import torch
@@ -33,15 +34,29 @@ console = Console()
 
 # ── 常量 (4 分类) ──
 NUM_POINTS = 8192
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 NUM_EPOCHS = 80
-LR = 5e-4
+LR = 1e-3
 WEIGHT_DECAY = 1e-4
 NUM_CLASSES = 4
 KEEP_RATIO = 0.4
+SAMPLES_PER_EPOCH = 3000
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_NAMES = {0: "噪声", 1: "混凝土", 2: "钢筋", 3: "套筒"}
 CHECKPOINT_BASE = os.path.join(os.path.dirname(__file__), "checkpoints")
+
+
+def _save_history(ckpt_dir, tag, history):
+    """将 history dict 保存为 .npz 和 .json（每个 epoch 调用，即时写盘防丢失）"""
+    try:
+        np.savez(
+            os.path.join(ckpt_dir, f"history_{tag}.npz"),
+            **{k: np.array(v) for k, v in history.items()},
+        )
+        with open(os.path.join(ckpt_dir, f"history_{tag}.json"), "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] 保存历史失败: {e}")
 
 
 def set_seed(seed=42):
@@ -167,7 +182,8 @@ def run_experiment(
     num_points: int = NUM_POINTS,
     seed: int = 42,
     checkpoint_subdir: str = None,
-    samples_per_epoch: int = None,
+    samples_per_epoch: int = SAMPLES_PER_EPOCH,
+    random_sample: bool = False,
 ) -> dict:
     """通用实验入口: 种子 → 数据 → 模型 → 训练 → 验证 → 测试.
 
@@ -183,12 +199,12 @@ def run_experiment(
         seed: 随机种子.
         checkpoint_subdir: checkpoint 子目录, 默认 "checkpoints/{tag}".
         samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
+        random_sample: 若 True, 使用纯随机采样 (A2 消融).
 
     Returns:
         summary dict: tag, desc, best_epoch, best_val_miou, best_val_ious,
                       test_ious, test_acc, 等.
     """
-    import json
 
     set_seed(seed)
     ckpt_dir = (
@@ -208,6 +224,7 @@ def run_experiment(
     make_train_loader, make_val_loader, make_test_loader = create_dataloaders(
         num_points, batch_size, keep_ratio=keep_ratio,
         samples_per_epoch=samples_per_epoch,
+        random_sample=random_sample,
     )
 
     # ── 模型 ──
@@ -216,7 +233,7 @@ def run_experiment(
 
     # ── 优化器 ──
     console.print(f"  [dim]AdamW: lr={lr}, weight_decay={weight_decay}[/]")
-    console.print(f"  [dim]PerSampleWeightedCE: max_weight=15.0, noise_weight=0.5[/]")
+    console.print(f"  [dim]Criterion: {type(criterion).__name__}[/]")
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
@@ -228,12 +245,15 @@ def run_experiment(
     history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
 
     for epoch in range(1, num_epochs + 1):
+        # 现代 PyTorch: scheduler.step() 放在 epoch 开头（而非结尾）
+        if epoch > 1:
+            scheduler.step()
+
         train_loader = make_train_loader()
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
         val_loss, val_ious, val_acc, val_prf, clean_miou = validate(
             model, make_val_loader, criterion
         )
-        scheduler.step()
         miou = val_ious["mIoU"]
 
         history["epoch"].append(epoch)
@@ -275,6 +295,9 @@ def run_experiment(
             torch.save(ckpt, os.path.join(ckpt_dir, f"best_{tag}.pth"))
             console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
 
+        # ── 每个 epoch 即时保存历史（防止中途失败丢失） ──
+        _save_history(ckpt_dir, tag, history)
+
     # ── 测试集评估 ──
     console.rule(f"[bold blue]{tag} 测试集评估[/]")
     ckpt_path = os.path.join(ckpt_dir, f"best_{tag}.pth")
@@ -303,12 +326,7 @@ def run_experiment(
         }
 
     # ── 保存 ──
-    np.savez(
-        os.path.join(ckpt_dir, f"history_{tag}.npz"),
-        **{k: np.array(v) for k, v in history.items()},
-    )
-    with open(os.path.join(ckpt_dir, f"history_{tag}.json"), "w") as f:
-        json.dump(history, f, indent=2)
+    _save_history(ckpt_dir, tag, history)
 
     summary = {
         "tag": tag,
