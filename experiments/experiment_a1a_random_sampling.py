@@ -1,16 +1,8 @@
 """
-Phase 1: S1 三分类 (噪声/混凝土/金属).
+消融 A1a — 无局部块采样 (纯随机采样).
 
-严格参考消融 A1 (experiment_a1_fixed_radius.py) 的设计哲学:
-  - PointNet++ 固定半径 (scale=None → 使用默认 0.2/0.4)
-  - 仅使用 XYZ 坐标 (in_channels=3, 忽略 geo_features)
-  - CrossEntropyLoss (非自适应加权)
-  - AdamW + CosineAnnealingLR
-
-标签映射: 原始 4 类 → S1 3 类
-  钢筋(2)→金属(2), 套筒(3)→金属(2)
-
-S1 的金属部件组合经过增强, 效果不应比 A1 的 4 分类差.
+验证正样本驱动的局部块采样的必要性。
+只训练 S1，仅改动 create_dataloaders(random_sample=True)。
 """
 
 import os, json
@@ -20,27 +12,17 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 
 from _common import (
-    console,
-    NUM_POINTS,
-    BATCH_SIZE,
-    LR,
-    WEIGHT_DECAY,
-    DEVICE,
-    CHECKPOINT_BASE,
-    set_seed,
-    _serialize_metrics,
-    _save_history,
+    console, NUM_POINTS, BATCH_SIZE, LR, WEIGHT_DECAY,
+    DEVICE, CHECKPOINT_BASE, set_seed, _serialize_metrics, _save_history,
     create_dataloaders,
 )
 from lib.pointnet2 import PointNetPlusPlus, count_params
 from lib.pointnet2.metrics import (
-    compute_iou,
-    compute_precision_recall_f1,
-    compute_accuracy,
+    compute_iou, compute_precision_recall_f1, compute_accuracy,
 )
 
-TAG = "phase1"
-DESC = "Phase 1: S1 (噪声/混凝土/金属)"
+TAG = "ablation_A1a"
+DESC = "A1a — 无局部块采样 (纯随机采样)"
 CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, TAG)
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -49,16 +31,12 @@ LR = 1e-3
 S1_NAMES = {0: "噪声", 1: "混凝土", 2: "金属"}
 
 
-class FixedRadiusStage1(PointNetPlusPlus):
-    """S1 三分类 — 固定半径 (同 A1), 仅 XYZ."""
-
+class S1Model(PointNetPlusPlus):
     def forward(self, xyz, geo_features=None, scale=None):
-        # scale=None → 使用 SA 层的默认固定半径 (0.2/0.4)
         return super().forward(xyz, geo_features=None, scale=None)
 
 
-def _map_labels(lbl: torch.Tensor) -> torch.Tensor:
-    """4 类标签 → 3 类: 钢筋(2)→金属(2), 套筒(3)→金属(2)."""
+def _map_labels(lbl):
     clbl = lbl.clone()
     clbl[clbl == 3] = 2
     return clbl
@@ -71,12 +49,10 @@ def validate(model, loader_fn, criterion):
     total_loss = 0.0
     all_p, all_t = [], []
     prog = Progress(
-        TextColumn("[bold]val[/]"),
-        BarColumn(),
+        TextColumn("[bold]val[/]"), BarColumn(),
         TextColumn("{task.completed}/{task.total}"),
         TextColumn("loss={task.fields[loss]:.4f}"),
-        TimeRemainingColumn(),
-        console=console,
+        TimeRemainingColumn(), console=console,
     )
     ttask = prog.add_task("val", total=len(loader), loss=0)
     with torch.no_grad(), prog:
@@ -103,18 +79,15 @@ def main():
     console.print(f"[bold]Device:[/] {DEVICE}")
 
     make_train, make_val, make_test = create_dataloaders(
-        NUM_POINTS,
-        BATCH_SIZE,
-        keep_ratio=0.4,
-        samples_per_epoch=3000,
+        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4,
+        samples_per_epoch=3000, random_sample=True,
     )
 
-    model = FixedRadiusStage1(num_classes=3, in_channels=3).to(DEVICE)
+    model = S1Model(num_classes=3, in_channels=3).to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
     console.print(f"  [dim]参数: {n_params:,}[/]")
 
     criterion = nn.CrossEntropyLoss()
-
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sch = CosineAnnealingLR(opt, T_max=EPOCHS)
 
@@ -128,14 +101,12 @@ def main():
         train_loss = 0.0
         vb = 0
         prog = Progress(
-            TextColumn(f"[bold]S1-ep{ep:03d}[/]"),
-            BarColumn(),
+            TextColumn(f"[bold]A1a-ep{ep:03d}[/]"), BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
             TextColumn("loss={task.fields[loss]:.4f}"),
-            TimeRemainingColumn(),
-            console=console,
+            TimeRemainingColumn(), console=console,
         )
-        ttask = prog.add_task("s1", total=len(make_train()), loss=0)
+        ttask = prog.add_task("a1a", total=len(make_train()), loss=0)
         with prog:
             for pts, feat, lbl, scale in make_train():
                 pts, lbl = pts.to(DEVICE), lbl.to(DEVICE)
@@ -151,7 +122,6 @@ def main():
                 train_loss += loss.item()
                 vb += 1
                 prog.update(ttask, advance=1, loss=loss.item())
-
         tl = train_loss / max(vb, 1)
         vl, ious, acc, prf, cm = validate(model, make_val, criterion)
         m = ious["mIoU"]
@@ -161,13 +131,8 @@ def main():
         hist["acc"].append(acc)
         hist["cm"].append(cm)
         io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-        pr = " | ".join(
-            f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}"
-            for k, v in prf.items()
-        )
-        console.print(
-            f"  S1: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}"
-        )
+        pr = " | ".join(f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}" for k, v in prf.items())
+        console.print(f"  A1a: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}")
         console.print(f"    PRF: [{pr}]")
         if m > best_m:
             best_m = m
@@ -177,31 +142,15 @@ def main():
 
     # ── 测试集 ──
     console.rule("[bold blue]测试集[/]")
-    model.load_state_dict(
-        torch.load(os.path.join(CHECKPOINT_DIR, "best_s1.pth"), map_location=DEVICE)
-    )
+    model.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR, "best_s1.pth"), map_location=DEVICE))
     tl, ious, acc, prf, cm = validate(model, make_test, criterion)
     tio = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-    console.print(
-        f"test_loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{tio}] | cm={cm:.3f}"
-    )
-    pr_str = " | ".join(
-        f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}"
-        for k, v in prf.items()
-    )
+    console.print(f"test_loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{tio}] | cm={cm:.3f}")
+    pr_str = " | ".join(f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}" for k, v in prf.items())
     console.print(f"  PRF: [{pr_str}]")
 
-    with open(os.path.join(CHECKPOINT_DIR, "summary_phase1.json"), "w") as f:
-        json.dump(
-            {
-                "best_miou": best_m,
-                "test_miou": ious["mIoU"],
-                "test_cm": cm,
-                **_serialize_metrics(ious, prf),
-            },
-            f,
-            indent=2,
-        )
+    with open(os.path.join(CHECKPOINT_DIR, "summary.json"), "w") as f:
+        json.dump({"best_miou": best_m, "test_miou": ious["mIoU"], "test_cm": cm, **_serialize_metrics(ious, prf)}, f, indent=2)
     console.print(f"[bold green]完成! 最佳 mIoU={best_m:.3f}[/]")
 
 

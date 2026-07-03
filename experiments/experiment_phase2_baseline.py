@@ -1,9 +1,15 @@
 """
-Phase 2: S2 四类精分割 (噪声/混凝土/钢筋/套筒).
+Phase 2 Baseline: S2 四类精分割 (噪声/混凝土/钢筋/套筒).
 
 管线: S1 → 混凝土4cm体素降采样 → S2
 
-S2 输入: XYZ(3) + S1概率(3) = 6通道
+使用方法:
+  python experiment_phase2_baseline.py                              # PointNet++ (默认)
+  python experiment_phase2_baseline.py --arch pointnet               # S1=PointNet
+  python experiment_phase2_baseline.py --arch pointmlp               # S1=PointMLP
+  python experiment_phase2_baseline.py --arch pointnext              # S1=PointNeXt
+
+S2 输入: XYZ(3) + S1概率(3) = 6通道 (固定为 PointNet++)
 S2 训练: 不训练混凝土 (ignore_index=1), 只修正噪声/钢筋/套筒
 S2 推理: 固定混凝土为输入标签, S2 仅输出噪声/钢筋/套筒
 
@@ -11,7 +17,7 @@ S2 推理: 固定混凝土为输入标签, S2 仅输出噪声/钢筋/套筒
 验证 V2: S1 管线 → S2 管线, 组合指标评估
 """
 
-import os, json, time, math
+import os, json, time, math, argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,22 +30,28 @@ from _common import (
     DEVICE, CHECKPOINT_BASE, set_seed, _serialize_metrics, _save_history,
     create_dataloaders, CLASS_NAMES,
 )
-from experiment_phase1 import FixedRadiusStage1
+from experiment_phase1_baseline import make_s1_model
 from lib.pointnet2 import PointNetPlusPlus, count_params
 from lib.pointnet2.metrics import compute_iou, compute_precision_recall_f1, compute_accuracy
 
-TAG = "phase2"
-DESC = "Phase 2: S2 (噪声/混凝土/钢筋/套筒, S1前馈)"
-CKPT_DIR = os.path.join(CHECKPOINT_BASE, TAG)
-os.makedirs(CKPT_DIR, exist_ok=True)
-
 EPOCHS = 80
 VOXEL_MM = 40.0       # 4cm 体素 (mm)
-S1_CKPT = os.path.join(CHECKPOINT_BASE, "phase1", "best_s1.pth")
-TRAIN_CACHE = os.path.join(CKPT_DIR, "s2_train.pt")
-VAL_CACHE = os.path.join(CKPT_DIR, "s2_val.pt")
 
 S2_NAMES = {0: "噪声(S2)", 1: "混凝土", 2: "钢筋(S2)", 3: "套筒(S2)"}
+
+ARCH_REGISTRY = ["pointnet++", "pointnet", "pointmlp", "pointnext"]
+
+
+def _s1_ckpt_dir(arch: str) -> str:
+    """返回对应架构的 S1 checkpoint 目录."""
+    suffix = "" if arch == "pointnet++" else f"_{arch}"
+    return os.path.join(CHECKPOINT_BASE, f"phase1_baseline{suffix}")
+
+
+def _s2_ckpt_dir(arch: str) -> str:
+    """返回对应架构的 S2 checkpoint 目录."""
+    suffix = "" if arch == "pointnet++" else f"_{arch}"
+    return os.path.join(CHECKPOINT_BASE, f"phase2_baseline{suffix}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -61,18 +73,7 @@ class Stage2Model(PointNetPlusPlus):
 # ═══════════════════════════════════════════════════════════
 
 def _filter_patch(pts_norm, s1_probs, gt_labels, scale_mm):
-    """S1 预测 → 混凝土4cm降采样 + 保留全部噪声/金属.
-
-    Args:
-        pts_norm:  (N, 3) 归一化坐标
-        s1_probs:  (N, 3) S1 softmax 概率
-        gt_labels: (N,)   GT 4 类标签 (0/1/2/3)
-        scale_mm:  float  原始尺度
-    Returns:
-        kept_pts:   (M, 3) 保留的坐标
-        kept_probs: (M, 3) 保留的 S1 概率
-        kept_gt:    (M,)   保留的 GT 标签
-    """
+    """S1 预测 → 混凝土4cm降采样 + 保留全部噪声/金属."""
     N = len(gt_labels)
     s1_pred = s1_probs.argmax(dim=-1)  # (N,) {0=噪, 1=砼, 2=金}
 
@@ -144,32 +145,26 @@ def _load_s2_loader(cache_path, batch_size, shuffle=False):
     class _S2Dataset(Dataset):
         def __init__(self, data):
             self.data = data
-
         def __len__(self):
             return len(self.data)
-
         def __getitem__(self, idx):
             pts, s1p, lbl, scale = self.data[idx]
             return pts, s1p, lbl, scale
 
     def collate_fn(batch):
-        # batch: list of (pts, s1p, lbl, scale)
         max_n = max(b[0].shape[0] for b in batch)
         B = len(batch)
         device = batch[0][0].device
-
         pts_pad = torch.zeros(B, max_n, 3, device=device)
         s1p_pad = torch.zeros(B, max_n, 3, device=device)
-        lbl_pad = torch.full((B, max_n), -1, dtype=torch.long, device=device)  # -1 = padding
+        lbl_pad = torch.full((B, max_n), -1, dtype=torch.long, device=device)
         scale_bt = torch.zeros(B, device=device)
-
         for i, (p, s, l, sc) in enumerate(batch):
             n = p.shape[0]
             pts_pad[i, :n] = p.to(device)
             s1p_pad[i, :n] = s.to(device)
             lbl_pad[i, :n] = l.to(device)
             scale_bt[i] = sc
-
         return pts_pad, s1p_pad, lbl_pad, scale_bt
 
     dataset = _S2Dataset(samples)
@@ -180,21 +175,18 @@ def _load_s2_loader(cache_path, batch_size, shuffle=False):
 
 
 # ═══════════════════════════════════════════════════════════
-#  V2 验证 (在保留点上直接计算)
+#  V2 验证
 # ═══════════════════════════════════════════════════════════
 
 @torch.no_grad()
 def val_v2_simple(s1_model, s2_model, loader_fn):
-    """V2 验证: batch S1+S2 推理加速.
-
-    组合预测: S2_pred[非混凝土] + 输入混凝土标签(1)
-    """
+    """V2 验证: batch S1+S2 推理加速."""
     s1_model.eval()
     s2_model.eval()
     loader = loader_fn()
 
-    all_sp, all_st = [], []           # S2 纯预测 vs GT (仅非混凝土)
-    all_cp, all_ct = [], []           # 组合预测 vs GT (全部保留点)
+    all_sp, all_st = [], []
+    all_cp, all_ct = [], []
 
     prog = Progress(
         TextColumn("[bold]V2[/]"), BarColumn(),
@@ -208,11 +200,9 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
             pts, lbl, scale = pts.to(DEVICE), lbl.to(DEVICE), scale.to(DEVICE)
             B = pts.shape[0]
 
-            # ── Batch S1 推理 ──
-            s1_logits = s1_model(pts, scale=None)  # (B, N, 3)
-            s1_probs = F.softmax(s1_logits, dim=-1)  # (B, N, 3)
+            s1_logits = s1_model(pts, scale=None)
+            s1_probs = F.softmax(s1_logits, dim=-1)
 
-            # ── 逐样本过滤 + 收集 S2 输入 ──
             f_pts, f_probs, f_lbl, f_s1pred, f_scale = [], [], [], [], []
             for b in range(B):
                 p, l, s = pts[b], lbl[b], scale[b].item()
@@ -223,14 +213,13 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
                 f_pts.append(kp.cpu())
                 f_probs.append(ks.cpu())
                 f_lbl.append(kl.cpu())
-                f_s1pred.append(ks.argmax(dim=-1).cpu())  # S1 argmax on kept
+                f_s1pred.append(ks.argmax(dim=-1).cpu())
                 f_scale.append(s)
 
             if not f_pts:
                 prog.update(task, advance=1)
                 continue
 
-            # ── Batch S2 推理 (padding) ──
             max_n = max(p.shape[0] for p in f_pts)
             nb = len(f_pts)
             pad_pts = torch.zeros(nb, max_n, 3, device=DEVICE)
@@ -242,15 +231,13 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
                 pad_pr[i, :n] = f_probs[i].to(DEVICE)
                 pad_sc[i] = f_scale[i]
 
-            s2_logits = s2_model(pad_pts, pad_pr, scale=pad_sc)  # (nb, max_n, 4)
+            s2_logits = s2_model(pad_pts, pad_pr, scale=pad_sc)
 
-            # ── 逐样本收集指标 ──
             for i in range(nb):
                 n = f_pts[i].shape[0]
-                s2_pred = s2_logits[i, :n].argmax(dim=-1)  # (M,)
+                s2_pred = s2_logits[i, :n].argmax(dim=-1)
                 kl = f_lbl[i].to(DEVICE)
 
-                # 组合预测: S1 预测为混凝土的点保持为 1, 其余用 S2
                 combined = s2_pred.clone()
                 s1_conc = (f_s1pred[i].to(DEVICE) == 1)
                 combined[s1_conc] = 1
@@ -258,7 +245,6 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
                 all_cp.append(combined.cpu())
                 all_ct.append(kl.cpu())
 
-                # S2 纯预测 (排除混凝土)
                 non_conc = kl != 1
                 if non_conc.any():
                     all_sp.append(s2_pred[non_conc].cpu())
@@ -271,18 +257,15 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
         z2 = {k: {"precision": 0, "recall": 0, "f1": 0} for k in S2_NAMES.values()}
         return z, z2, 0.0, z, z2, 0.0, 0.0
 
-    # ── 组合指标 (4 类) ──
     cp = torch.cat(all_cp)
     ct = torch.cat(all_ct)
     c_ious = compute_iou(cp, ct, CLASS_NAMES)
     c_acc = compute_accuracy(cp, ct)
     c_prf = compute_precision_recall_f1(cp, ct, CLASS_NAMES)
 
-    # ── S2 纯指标 (噪声/钢筋/套筒) ──
     if all_sp:
         sp = torch.cat(all_sp)
         st = torch.cat(all_st)
-        s2_names_sub = {0: "噪声(S2)", 2: "钢筋(S2)", 3: "套筒(S2)"}
         s_ious = {}
         for cls_id, cls_name in [(0, "噪声(S2)"), (2, "钢筋(S2)"), (3, "套筒(S2)")]:
             mask_t = (st == cls_id)
@@ -290,25 +273,22 @@ def val_v2_simple(s1_model, s2_model, loader_fn):
             inter = (mask_t & mask_p).sum().float()
             union = (mask_t | mask_p).sum().float()
             s_ious[cls_name] = (inter / (union + 1e-10)).item()
-        s_ious["mIoU"] = sum(s_ious.get(n, 0) for n in s2_names_sub.values()) / 3.0
+        s_ious["mIoU"] = sum(s_ious.get(n, 0) for n in ["噪声(S2)", "钢筋(S2)", "套筒(S2)"]) / 3.0
     else:
         s_ious = {"mIoU": 0.0}
         for n in ["噪声(S2)", "钢筋(S2)", "套筒(S2)"]:
             s_ious[n] = 0.0
 
-    # ── 钢筋&套筒 IoU ──
     rs_inter = ((cp == 2) & (ct == 2)).sum().float() + ((cp == 3) & (ct == 3)).sum().float()
     rs_union = ((cp == 2) | (ct == 2)).sum().float() + ((cp == 3) | (ct == 3)).sum().float()
     rs_iou = (rs_inter / (rs_union + 1e-10)).item()
 
-    # ── 干净 mIoU (混凝土+钢筋+套筒) ──
     cm = (c_ious.get("混凝土", 0) + c_ious.get("钢筋", 0) + c_ious.get("套筒", 0)) / 3.0
 
     return c_ious, c_prf, c_acc, s_ious, rs_iou, cm
 
 
 def print_v2(ep, tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm):
-    """打印 V2 指标."""
     cio = " | ".join(f"{k}={v:.3f}" for k, v in c_ious.items() if k != "mIoU")
     cpr = " | ".join(f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}" for k, v in c_prf.items())
     console.print(f"  S2: tl={tl:.4f} acc={c_acc:.3f} mIoU={c_ious['mIoU']:.3f} | [{cio}] | cm={cm:.3f} | rsIoU={rs_iou:.3f}")
@@ -318,27 +298,52 @@ def print_v2(ep, tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm):
 
 
 # ═══════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Phase 2: S2 四类精分割基线")
+    parser.add_argument("--arch", type=str, default="pointnet++",
+                        choices=ARCH_REGISTRY,
+                        help="S1 骨干网络架构 (默认: pointnet++)")
+    return parser.parse_args()
+
+
+# ═══════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════
 
 def main():
+    args = parse_args()
+    arch = args.arch
+
+    tag_suffix = "" if arch == "pointnet++" else f"_{arch}"
+    tag = f"phase2_baseline{tag_suffix}"
+    desc = f"Phase 2: S2 ({arch}, 噪声/混凝土/钢筋/套筒, S1前馈)"
+    ckpt_dir = _s2_ckpt_dir(arch)
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    s1_ckpt_path = os.path.join(_s1_ckpt_dir(arch), "best_s1.pth")
+    train_cache = os.path.join(ckpt_dir, "s2_train.pt")
+    val_cache = os.path.join(ckpt_dir, "s2_val.pt")
+
     set_seed(42)
-    console.rule(f"[bold]{DESC}[/]")
-    console.print(f"[bold]Device:[/] {DEVICE}")
+    console.rule(f"[bold]{desc}[/]")
+    console.print(f"[bold]Device:[/] {DEVICE}  S1 Arch: {arch}")
     console.print(f"  体素: {VOXEL_MM}mm (4cm), 仅混凝土降采样, 保留全部噪声+金属")
 
     # ── 检查 S1 权重 ──
-    if not os.path.exists(S1_CKPT):
-        console.print(f"[red]未找到 S1 权重 {S1_CKPT}, 请先运行 experiment_phase1.py[/]")
+    if not os.path.exists(s1_ckpt_path):
+        console.print(f"[red]未找到 S1 权重 {s1_ckpt_path}, 请先运行 experiment_phase1_baseline.py --arch {arch}[/]")
         return
 
     # ── S1 模型 (冻结, 仅推理) ──
-    s1_model = FixedRadiusStage1(num_classes=3, in_channels=3).to(DEVICE)
-    s1_model.load_state_dict(torch.load(S1_CKPT, map_location=DEVICE))
+    s1_model = make_s1_model(arch).to(DEVICE)
+    s1_model.load_state_dict(torch.load(s1_ckpt_path, map_location=DEVICE))
     s1_model.eval()
     for p in s1_model.parameters():
         p.requires_grad = False
-    console.print(f"  [dim]S1 已加载 (冻结)[/]")
+    console.print(f"  [dim]S1 ({arch}) 已加载 (冻结)[/]")
 
     # ── 数据加载 ──
     make_train, make_val, make_test = create_dataloaders(
@@ -347,22 +352,22 @@ def main():
 
     # ── 预计算 S2 数据集 ──
     console.rule("[bold]预计算 S2 数据集[/]")
-    _build_s2_dataset(s1_model, make_train, TRAIN_CACHE)
-    _build_s2_dataset(s1_model, make_val, VAL_CACHE)
+    _build_s2_dataset(s1_model, make_train, train_cache)
+    _build_s2_dataset(s1_model, make_val, val_cache)
 
-    train_loader = _load_s2_loader(TRAIN_CACHE, BATCH_SIZE, shuffle=True)
-    val_loader = _load_s2_loader(VAL_CACHE, BATCH_SIZE * 2, shuffle=False)
+    train_loader = _load_s2_loader(train_cache, BATCH_SIZE, shuffle=True)
+    val_loader = _load_s2_loader(val_cache, BATCH_SIZE * 2, shuffle=False)
 
-    n_train = len(torch.load(TRAIN_CACHE, weights_only=False))
+    n_train = len(torch.load(train_cache, weights_only=False))
     console.print(f"  [bold]训练:[/] {n_train} patches ({len(train_loader)} batch/epoch)")
-    console.print(f"  [bold]验证:[/] {len(torch.load(VAL_CACHE, weights_only=False))} patches ({len(val_loader)} batch)")
+    console.print(f"  [bold]验证:[/] {len(torch.load(val_cache, weights_only=False))} patches ({len(val_loader)} batch)")
 
     # ── S2 模型 ──
     s2_model = Stage2Model().to(DEVICE)
     n_p = sum(p.numel() for p in s2_model.parameters())
     console.print(f"  [dim]S2 参数: {n_p:,}[/]")
 
-    criterion = nn.CrossEntropyLoss(ignore_index=-1)  # -1 = padding
+    criterion = nn.CrossEntropyLoss(ignore_index=-1)
     opt = torch.optim.AdamW(s2_model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sch = CosineAnnealingLR(opt, T_max=EPOCHS)
 
@@ -375,12 +380,11 @@ def main():
     for ep in range(1, EPOCHS + 1):
         if ep > 1:
             sch.step()
-        # ── 训练 ──
         s2_model.train()
         tl = 0.0
         n_b = 0
         prog = Progress(
-            TextColumn(f"[bold]S2-ep{ep:03d}[/]"), BarColumn(),
+            TextColumn(f"[bold]S2-{arch}-ep{ep:03d}[/]"), BarColumn(),
             TextColumn("{task.completed}/{task.total}"),
             TextColumn("loss={task.fields[loss]:.4f}"),
             TimeRemainingColumn(), console=console,
@@ -394,13 +398,10 @@ def main():
                 scale_bt = scale_bt.to(DEVICE)
 
                 opt.zero_grad()
+                logits = s2_model(pts_pad, s1p_pad, scale=scale_bt)
 
-                # S2 前向
-                logits = s2_model(pts_pad, s1p_pad, scale=scale_bt)  # (B, M, 4)
-
-                # 损失: 混凝土(1)和padding(-1)都映射到-1忽略
                 loss_lbl = lbl_pad.clone()
-                loss_lbl[loss_lbl == 1] = -1  # 混凝土不参与梯度
+                loss_lbl[loss_lbl == 1] = -1
                 loss = criterion(logits.permute(0, 2, 1), loss_lbl)
 
                 if torch.isnan(loss):
@@ -414,7 +415,6 @@ def main():
 
         s2_tl = tl / max(n_b, 1)
 
-        # ── 验证 V2 ──
         c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
             s1_model, s2_model, make_val,
         )
@@ -436,14 +436,14 @@ def main():
                 "cm": cm,
                 "c_ious": c_ious,
                 "rs_iou": rs_iou,
-            }, os.path.join(CKPT_DIR, "best_s2.pth"))
+            }, os.path.join(ckpt_dir, "best_s2.pth"))
             console.print(f"  [green]↑ 最佳 (cm={cm:.3f})[/]")
 
-        _save_history(CKPT_DIR, TAG, hist)
+        _save_history(ckpt_dir, tag, hist)
 
     # ── 测试集 ──
     console.rule("[bold blue]测试集 (S1→S2 全管线)[/]")
-    ckpt = os.path.join(CKPT_DIR, "best_s2.pth")
+    ckpt = os.path.join(ckpt_dir, "best_s2.pth")
     if os.path.exists(ckpt):
         sd = torch.load(ckpt, map_location=DEVICE)
         s2_model.load_state_dict(sd["model_state"])
@@ -455,8 +455,9 @@ def main():
     else:
         console.print("[yellow]未找到 best_s2.pth[/]")
 
-    with open(os.path.join(CKPT_DIR, "summary_phase2.json"), "w") as f:
+    with open(os.path.join(ckpt_dir, "summary_phase2.json"), "w") as f:
         json.dump({
+            "arch": arch,
             "best_cm": best_cm,
             "test_miou": c_ious.get("mIoU", 0),
             "test_cm": cm,

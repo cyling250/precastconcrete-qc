@@ -1,27 +1,23 @@
 """
-敏感性 S3 — 点云密度: 固定噪声=medium, 改变密度.
+敏感性 S3 — 点云密度: 固定噪声=medium, 评估基线 cascade 在各密度子集上.
 
-设计: 训练一个主试验模型, 在 3 个密度子集上分别评估.
+设计: 加载已训练的 phase1_baseline + phase2_baseline, 
+      在密度过滤子集上做 V2 评估.
 """
 
-import os
-import json
+import os, json
 import torch
-import torch.nn as nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+import torch.nn.functional as F
 
 from _common import (
-    console,
-    NUM_POINTS, BATCH_SIZE, NUM_EPOCHS, LR, WEIGHT_DECAY,
-    NUM_CLASSES, DEVICE, CHECKPOINT_BASE,
-    set_seed, train_one_epoch, validate, _serialize_metrics,
-    _save_history,
-    PointNetPlusPlus, create_dataloaders, count_params,
+    console, NUM_POINTS, BATCH_SIZE, DEVICE, CHECKPOINT_BASE, set_seed,
+    create_dataloaders, CLASS_NAMES,
 )
+from experiment_phase1_baseline import make_s1_model
+from experiment_phase2_baseline import Stage2Model, val_v2_simple
 
-TAG = "S3"
-CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, "sensitivity_S3")
-MODEL_CKPT = os.path.join(CHECKPOINT_DIR, "best_S3_density_model.pth")
+S1_CKPT = os.path.join(CHECKPOINT_BASE, "phase1_baseline", "best_s1.pth")
+S2_CKPT = os.path.join(CHECKPOINT_BASE, "phase2_baseline", "best_s2.pth")
 
 DENSITY_LEVELS = {
     "density_low": {
@@ -30,7 +26,7 @@ DENSITY_LEVELS = {
     },
     "density_medium": {
         "filter": lambda f: os.path.basename(f).endswith("_medium_medium.npz"),
-        "desc": "中密度 (0.01 pts/mm², 主试验)",
+        "desc": "中密度 (0.01 pts/mm², 基线)",
     },
     "density_high": {
         "filter": lambda f: os.path.basename(f).endswith("_high_medium.npz"),
@@ -39,118 +35,64 @@ DENSITY_LEVELS = {
 }
 
 
-@torch.no_grad()
-def evaluate_on_subset(model, criterion, file_filter: callable) -> dict:
-    _, _, make_test_loader = create_dataloaders(
+def load_baseline():
+    if not os.path.exists(S1_CKPT) or not os.path.exists(S2_CKPT):
+        console.print("[red]请先训练 baseline (phase1 + phase2)[/]")
+        return None, None
+    s1 = make_s1_model("pointnet++").to(DEVICE)
+    s1.load_state_dict(torch.load(S1_CKPT, map_location=DEVICE))
+    s1.eval()
+    s2 = Stage2Model().to(DEVICE)
+    s2.load_state_dict(torch.load(S2_CKPT, map_location=DEVICE)["model_state"])
+    s2.eval()
+    return s1, s2
+
+
+def evaluate(s1, s2, filter_fn, desc):
+    console.print(f"\n[bold cyan]▶ {desc}[/]")
+    _, _, make_test = create_dataloaders(
         NUM_POINTS, BATCH_SIZE, keep_ratio=0.4,
-        file_filter=file_filter, only_test=True,
+        file_filter=filter_fn, only_test=True,
     )
-    test_loss, test_ious, test_acc, test_prf, test_clean_miou = validate(
-        model, make_test_loader, criterion
-    )
-    console.print(
-        f"  test_loss={test_loss:.4f} test_acc={test_acc:.3f} "
-        f"mIoU={test_ious['mIoU']:.3f} | 干净mIoU={test_clean_miou:.3f}"
-    )
+    c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(s1, s2, make_test)
+    cio = " | ".join(f"{k}={v:.3f}" for k, v in c_ious.items() if k != "mIoU")
+    console.print(f"  acc={c_acc:.3f} mIoU={c_ious['mIoU']:.3f} | [{cio}] | cm={cm:.3f} | rsIoU={rs_iou:.3f}")
     return {
-        "test_loss": test_loss, "test_acc": test_acc,
-        "test_mIoU": test_ious["mIoU"], "test_clean_miou": test_clean_miou,
-        **_serialize_metrics(test_ious, test_prf),
+        "test_mIoU": c_ious["mIoU"],
+        "test_cm": cm,
+        "test_rs_iou": rs_iou,
+        "test_acc": c_acc,
+        **{f"iou/{k}": v for k, v in c_ious.items() if k != "mIoU"},
     }
 
 
-def train_or_load_model() -> torch.nn.Module:
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    if os.path.exists(MODEL_CKPT):
-        console.print(f"[dim]加载已有模型: {MODEL_CKPT}[/]")
-        model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
-        model.load_state_dict(torch.load(MODEL_CKPT)["model_state"])
-        return model
-
-    console.print("[bold]训练主试验模型 (完整数据集)...[/]")
-    set_seed(42)
-    make_train_loader, make_val_loader, _ = create_dataloaders(
-        NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000
-    )
-
-    model = PointNetPlusPlus(NUM_CLASSES, in_channels=3).to(DEVICE)
-    console.print(f"  [dim]模型参数: {count_params(model):,}[/]")
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
-
-    best_miou = 0.0
-    history = {"epoch": [], "train_loss": [], "val_loss": [], "val_acc": [], "clean_miou": []}
-    for epoch in range(1, NUM_EPOCHS + 1):
-        if epoch > 1:
-            scheduler.step()
-
-        train_loader = make_train_loader()
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, epoch)
-        val_loss, val_ious, val_acc, val_prf, clean_miou = validate(model, make_val_loader, criterion)
-        miou = val_ious["mIoU"]
-        iou_str = " | ".join(f"{k}={v:.3f}" for k, v in val_ious.items() if k != "mIoU")
-        console.print(f"  train_loss={train_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.3f} mIoU={miou:.3f}")
-        console.print(f"    IoU: [{iou_str}]  mIoU={miou:.3f} | 干净mIoU={clean_miou:.3f}")
-
-        history["epoch"].append(epoch)
-        history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_loss)
-        history["val_acc"].append(val_acc)
-        history["clean_miou"].append(clean_miou)
-        for k, v in _serialize_metrics(val_ious, val_prf).items():
-            history.setdefault(k, []).append(v)
-
-        if miou > best_miou:
-            best_miou = miou
-            torch.save({
-                "epoch": epoch, "model_state": model.state_dict(),
-                "val_miou": miou, "val_ious": val_ious, "val_prf": val_prf,
-            }, MODEL_CKPT)
-            console.print(f"  [green]↑ 新最佳 (mIoU={miou:.3f})[/]")
-
-        # 每 epoch 即时保存历史
-        _save_history(CHECKPOINT_DIR, TAG, history)
-
-    console.print(f"[green]模型训练完成, 最佳 val_mIoU={best_miou:.3f}[/]")
-    return model
-
-
-def print_comparison(results: dict):
-    console.rule("[bold cyan]S3 — 点云密度敏感性汇总[/]")
-    header = (f"{'密度':>14} | {'test_mIoU':>8} | {'噪声IoU':>8} | "
-              f"{'混凝土IoU':>8} | {'钢筋IoU':>8} | {'套筒IoU':>8} | {'干净mIoU':>8} | {'test_acc':>8}")
-    console.print(header)
-    console.print("-" * len(header))
-    for tag, r in results.items():
-        console.print(
-            f"{tag:>14} | {r.get('test_mIoU', 0):>8.3f} | "
-            f"{r.get('iou/噪声', 0):>8.3f} | {r.get('iou/混凝土', 0):>8.3f} | "
-            f"{r.get('iou/钢筋', 0):>8.3f} | {r.get('iou/套筒', 0):>8.3f} | "
-            f"{r.get('test_clean_miou', 0):>8.3f} | {r.get('test_acc', 0):>8.3f}"
-        )
-
-
 def main():
+    set_seed(42)
     console.rule("[bold]S3 — 点云密度敏感性[/]")
     console.print(f"[bold]Device:[/] {DEVICE}")
 
-    criterion = nn.CrossEntropyLoss()
-    model = train_or_load_model()
-    model.eval()
+    s1, s2 = load_baseline()
+    if s1 is None:
+        return
 
     results = {}
     for tag, cfg in DENSITY_LEVELS.items():
-        console.print(f"\n[bold cyan]▶ {cfg['desc']}[/]")
-        metrics = evaluate_on_subset(model, criterion, cfg["filter"])
-        results[tag] = {"tag": tag, "desc": cfg["desc"], **metrics}
+        r = evaluate(s1, s2, cfg["filter"], cfg["desc"])
+        results[tag] = {"tag": tag, "desc": cfg["desc"], **r}
 
-    print_comparison(results)
-    summary_path = os.path.join(CHECKPOINT_DIR, "sensitivity_S3_summary.json")
-    with open(summary_path, "w") as f:
+    # 汇总
+    console.rule("[bold cyan]S3 — 点云密度敏感性汇总[/]")
+    header = f"{'密度':>14} | {'mIoU':>8} | {'cm':>8} | {'rsIoU':>8} | {'噪声':>8} | {'混凝土':>8} | {'钢筋':>8} | {'套筒':>8}"
+    console.print(header)
+    console.print("-" * len(header))
+    for tag, r in results.items():
+        console.print(f"{tag:>14} | {r['test_mIoU']:>8.3f} | {r['test_cm']:>8.3f} | {r['test_rs_iou']:>8.3f} | "
+                      f"{r.get('iou/噪声', 0):>8.3f} | {r.get('iou/混凝土', 0):>8.3f} | "
+                      f"{r.get('iou/钢筋', 0):>8.3f} | {r.get('iou/套筒', 0):>8.3f}")
+
+    with open(os.path.join(CHECKPOINT_BASE, "sensitivity_S3_summary.json"), "w") as f:
         json.dump(results, f, indent=2)
-    console.print(f"\n[bold green]S3 完成! 汇总已保存至 {summary_path}[/]")
+    console.print(f"[bold green]S3 完成![/]")
 
 
 if __name__ == "__main__":
