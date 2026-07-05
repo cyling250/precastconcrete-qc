@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List
 
-from .model import farthest_point_sample, _index_points, _square_distance
+from ._pointnet2_base import farthest_point_sample, _index_points, _square_distance
 
 
 # ── Geometric Affine Module ──

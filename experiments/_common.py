@@ -24,7 +24,7 @@ from lib.pointnet2 import (
     create_dataloaders,
     PerSampleWeightedCE,
 )
-from lib.pointnet2.metrics import (
+from lib.pointnet2.metrics_utils import (
     compute_iou,
     compute_precision_recall_f1,
     compute_accuracy,

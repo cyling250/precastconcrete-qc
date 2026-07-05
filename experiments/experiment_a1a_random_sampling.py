@@ -16,8 +16,8 @@ from _common import (
     DEVICE, CHECKPOINT_BASE, set_seed, _serialize_metrics, _save_history,
     create_dataloaders,
 )
-from lib.pointnet2 import PointNetPlusPlus, count_params
-from lib.pointnet2.metrics import (
+from lib.pointnet2.models import PointNetPlusPlus, count_params
+from lib.pointnet2.metrics_utils import (
     compute_iou, compute_precision_recall_f1, compute_accuracy,
 )
 

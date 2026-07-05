@@ -12,13 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Optional
 
-# ── reuse existing utilities from model.py ──
-from .model import (
-    farthest_point_sample,
-    ball_query,
-    _index_points,
-    _square_distance,
-)
+from ._pointnet2_base import farthest_point_sample, ball_query, _index_points, _square_distance
 
 
 # ═══════════════════════════════════════════════════════════════

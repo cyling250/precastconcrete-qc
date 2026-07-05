@@ -14,7 +14,7 @@ from _common import (
     create_dataloaders, CLASS_NAMES,
 )
 from experiment_phase1_baseline import make_s1_model
-from experiment_phase2_baseline import Stage2Model, val_v2_simple
+from lib.pointnet2 import Stage2Model, val_v2_simple
 
 S1_CKPT = os.path.join(CHECKPOINT_BASE, "phase1_baseline", "best_s1.pth")
 S2_CKPT = os.path.join(CHECKPOINT_BASE, "phase2_baseline", "best_s2.pth")
@@ -54,7 +54,7 @@ def evaluate(s1, s2, filter_fn, desc):
         NUM_POINTS, BATCH_SIZE, keep_ratio=0.4,
         file_filter=filter_fn, only_test=True,
     )
-    c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(s1, s2, make_test)
+    c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(s1, s2, make_test, DEVICE, CLASS_NAMES)
     cio = " | ".join(f"{k}={v:.3f}" for k, v in c_ious.items() if k != "mIoU")
     console.print(f"  acc={c_acc:.3f} mIoU={c_ious['mIoU']:.3f} | [{cio}] | cm={cm:.3f} | rsIoU={rs_iou:.3f}")
     return {
