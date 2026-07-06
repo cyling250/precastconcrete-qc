@@ -54,7 +54,8 @@ ARCH_REGISTRY = {
     "pointnext": PointNeXtSeg,
 }
 
-EPOCHS = 120
+EPOCHS = 80
+EARLY_STOP_PATIENCE = 10      # cm 连续 10 epoch 不创新高则停止
 LR = 1e-3
 S1_NAMES = {0: "噪声", 1: "混凝土", 2: "金属"}
 
@@ -141,6 +142,12 @@ def parse_args():
     parser.add_argument("--arch", type=str, default="pointnet++",
                         choices=list(ARCH_REGISTRY.keys()),
                         help="骨干网络架构 (默认: pointnet++)")
+    parser.add_argument("--run-suffix", type=str, default="",
+                        help="自定义标签后缀 (用于区分不同运行, 不覆盖旧结果)")
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="覆盖训练轮数 (默认使用 EPOCHS=80)")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="早停耐心值 (默认使用 EARLY_STOP_PATIENCE=10)")
     return parser.parse_args()
 
 
@@ -151,16 +158,23 @@ def parse_args():
 def main():
     args = parse_args()
     arch = args.arch
-    tag_suffix = "" if arch == "pointnet++" else f"_{arch}"
+    run_suffix = args.run_suffix
+    tag_suffix = f"_{arch}" if arch != "pointnet++" else ""
+    tag_suffix += run_suffix
     tag = f"phase1_baseline{tag_suffix}"
     desc = f"Phase 1: S1 ({arch}, 噪声/混凝土/金属)"
+
+    num_epochs = args.epochs if args.epochs is not None else EPOCHS
+    early_stop_patience = args.patience if args.patience is not None else EARLY_STOP_PATIENCE
 
     CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, tag)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     set_seed(42)
     console.rule(f"[bold]{desc}[/]")
-    console.print(f"[bold]Device:[/] {DEVICE}  Arch: {arch}")
+    console.print(f"[bold]Device:[/] {DEVICE}  Arch: {arch}  Epochs: {num_epochs}  Patience: {early_stop_patience}")
+    if run_suffix:
+        console.print(f"[yellow]  运行标识: {run_suffix}, 保存至: {tag}[/]")
 
     make_train, make_val, make_test = create_dataloaders(
         NUM_POINTS,
@@ -175,12 +189,14 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    sch = CosineAnnealingLR(opt, T_max=EPOCHS)
+    sch = CosineAnnealingLR(opt, T_max=num_epochs)
 
     best_m = 0.0
+    best_ep = 0
+    patience_counter = 0
     hist = {"epoch": [], "loss": [], "val_loss": [], "acc": [], "cm": []}
 
-    for ep in range(1, EPOCHS + 1):
+    for ep in range(1, num_epochs + 1):
         if ep > 1:
             sch.step()
         model.train()
@@ -230,9 +246,18 @@ def main():
         console.print(f"    PRF: [{pr}]")
         if m > best_m:
             best_m = m
+            best_ep = ep
+            patience_counter = 0
             torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, "best_s1.pth"))
             console.print(f"  [green]↑ 最佳 (mIoU={m:.3f})[/]")
+        else:
+            patience_counter += 1
+            console.print(f"  [dim]早停计数: {patience_counter}/{early_stop_patience} (最佳 @ ep{best_ep}: mIoU={best_m:.3f})[/]")
         _save_history(CHECKPOINT_DIR, tag, hist)
+
+        if patience_counter >= early_stop_patience:
+            console.print(f"[yellow]早停触发: {early_stop_patience} epoch 无提升, 停止训练 (最佳 @ ep{best_ep})[/]")
+            break
 
     # ── 测试集 ──
     console.rule("[bold blue]测试集[/]")
