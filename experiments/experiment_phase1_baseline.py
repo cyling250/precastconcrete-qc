@@ -244,6 +244,13 @@ def main():
                 start_epoch = completed + 1
                 # 恢复历史记录和最佳跟踪
                 hist = old_hist
+                # 补齐可能缺失的 iou/prf keys（向前兼容）
+                for cls_name in S1_NAMES.values():
+                    hist.setdefault(f"iou_{cls_name}", [])
+                    hist.setdefault(f"prf_{cls_name}_precision", [])
+                    hist.setdefault(f"prf_{cls_name}_recall", [])
+                    hist.setdefault(f"prf_{cls_name}_f1", [])
+                # 由于 hist 从旧文件恢复时 iou_* 是空列表, 用 cm 恢复最佳跟踪
                 cm_vals = hist.get("cm", [0.0])
                 if cm_vals:
                     best_idx = int(max(range(len(cm_vals)), key=lambda i: cm_vals[i]))
