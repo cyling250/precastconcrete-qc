@@ -433,6 +433,7 @@ def create_dataloaders(
     pos_ratio: float = 0.8,
     samples_per_epoch: int = None,
     random_sample: bool = False,
+    val_batch_mult: int = 1,
 ):
     """返回 (make_train_loader, make_val_loader, make_test_loader).
 
@@ -449,6 +450,7 @@ def create_dataloaders(
         pos_ratio: 含钢筋/套筒的 patch 在训练集中占比目标 (默认 0.8).
         samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
         random_sample: 若 True, 使用纯随机采样替代物理球查询采样.
+        val_batch_mult: 验证/测试集 batch_size 倍数 (默认 1, 设为 4 则 val batch=4x).
     """
     train_files = _list_npz_files(TRAIN_DIR) if not only_test else []
     val_files = _list_npz_files(VAL_DIR) if not only_test else []
@@ -473,7 +475,7 @@ def create_dataloaders(
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size, shuffle=False,
+                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
                 num_workers=0, pin_memory=True,
             )
 
@@ -502,13 +504,13 @@ def create_dataloaders(
 
         def make_val_loader():
             return DataLoader(
-                val_dataset, batch_size=batch_size, shuffle=False,
+                val_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
                 num_workers=0, pin_memory=True,
             )
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size, shuffle=False,
+                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
                 num_workers=0, pin_memory=True,
             )
     else:
@@ -532,13 +534,13 @@ def create_dataloaders(
 
         def make_val_loader():
             return DataLoader(
-                val_dataset, batch_size=batch_size, shuffle=False,
+                val_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
                 num_workers=0, pin_memory=True,
             )
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size, shuffle=False,
+                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
                 num_workers=0, pin_memory=True,
             )
 

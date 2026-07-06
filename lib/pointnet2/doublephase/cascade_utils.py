@@ -177,10 +177,11 @@ def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
     prog = Progress(
         TextColumn("[bold]V2[/]"), BarColumn(),
         TextColumn("{task.completed}/{task.total}"),
-        TimeRemainingColumn(), console=None,
+        TimeRemainingColumn(), console=__import__("rich").console.Console(),
     )
+    vtask = prog.add_task("val", total=len(loader))
 
-    with torch.no_grad():
+    with torch.no_grad(), prog:
         for pts, feat, lbl, scale in loader:
             pts, lbl, scale = pts.to(device), lbl.to(device), scale.to(device)
             B = pts.shape[0]
@@ -202,6 +203,7 @@ def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
                 f_scale.append(s)
 
             if not f_pts:
+                prog.update(vtask, advance=1)
                 continue
 
             max_n = max(p.shape[0] for p in f_pts)
@@ -233,6 +235,8 @@ def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
                 if non_conc.any():
                     all_sp.append(s2_pred[non_conc].cpu())
                     all_st.append(kl[non_conc].cpu())
+
+            prog.update(vtask, advance=1)
 
     if not all_cp:
         z = {k: 0.0 for k in list(class_names.values()) + ["mIoU"]}
