@@ -38,7 +38,8 @@ class Stage2Model(PointNetPlusPlus):
 # ═══════════════════════════════════════════════════════════
 
 
-def filter_patch(pts_norm, s1_probs, gt_labels, scale_mm, voxel_mm=40.0):
+def filter_patch(pts_norm, s1_probs, gt_labels, scale_mm, voxel_mm=40.0,
+                 teacher_forcing=False):
     """S1 预测 → 混凝土 voxel_mm 降采样 + 保留全部噪声/金属.
 
     Args:
@@ -47,6 +48,8 @@ def filter_patch(pts_norm, s1_probs, gt_labels, scale_mm, voxel_mm=40.0):
         gt_labels: (N,) ground truth labels
         scale_mm: float, normalization scale in mm
         voxel_mm: float, voxel size in mm (default 40mm = 4cm)
+        teacher_forcing: if True, use GT labels to identify concrete
+                         (not S1 predictions) for voxel downsampling
     Returns:
         filtered_pts, filtered_probs, filtered_labels
     """
@@ -55,8 +58,13 @@ def filter_patch(pts_norm, s1_probs, gt_labels, scale_mm, voxel_mm=40.0):
 
     keep = torch.ones(N, dtype=torch.bool, device=pts_norm.device)
 
-    # 对 S1 预测为混凝土的点做体素降采样
-    is_conc = s1_pred == 1
+    # 教师强制: 用 GT 标签识别混凝土; 否则用 S1 预测
+    if teacher_forcing:
+        # GT: 0=噪声, 1=混凝土, 2=钢筋, 3=套筒
+        is_conc = gt_labels == 1
+    else:
+        is_conc = s1_pred == 1
+
     if is_conc.any():
         conc_idx = torch.where(is_conc)[0]
         conc_pts = pts_norm[conc_idx]
@@ -82,18 +90,31 @@ def filter_patch(pts_norm, s1_probs, gt_labels, scale_mm, voxel_mm=40.0):
 
 
 def build_s2_dataset(s1_model, loader_fn, cache_path, device, console,
-                      voxel_mm=40.0):
-    """用 S1 预计算全部 patch → 过滤 → 缓存到磁盘."""
+                      voxel_mm=40.0, teacher_forcing=False):
+    """用 S1 预计算全部 patch → 过滤 → 缓存到磁盘.
+
+    Args:
+        teacher_forcing: if True, use GT labels for concrete identification
+                         (saved with _tf suffix in cache name)
+    """
     from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 
-    if os.path.exists(cache_path):
-        console.print(f"  [dim]S2 缓存已存在: {cache_path}[/]")
+    # 教师强制数据集用不同缓存名
+    actual_path = cache_path
+    if teacher_forcing:
+        base, ext = os.path.splitext(cache_path)
+        actual_path = f"{base}_tf{ext}"
+
+    if os.path.exists(actual_path):
+        mode = "教师强制" if teacher_forcing else "S1预测"
+        console.print(f"  [dim]S2 缓存已存在 ({mode}): {actual_path}[/]")
         return
 
+    mode_tag = "TF" if teacher_forcing else "S1"
     loader = loader_fn()
     samples = []
     prog = Progress(
-        TextColumn("[bold]S2 预计算[/]"), BarColumn(),
+        TextColumn(f"[bold]S2[{mode_tag}] 预计算[/]"), BarColumn(),
         TextColumn("{task.completed}/{task.total}"),
         TimeRemainingColumn(), console=console,
     )
@@ -107,20 +128,31 @@ def build_s2_dataset(s1_model, loader_fn, cache_path, device, console,
                 # S1 推理
                 logits = s1_model(p.unsqueeze(0), scale=None)  # (1, N, 3)
                 s1_probs = F.softmax(logits, dim=-1).squeeze(0)  # (N, 3)
-                # 过滤 (混凝土降采样)
-                kp, ks, kl = filter_patch(p, s1_probs, l, s, voxel_mm=voxel_mm)
+                # 过滤 (混凝土降采样, 支持教师强制)
+                kp, ks, kl = filter_patch(p, s1_probs, l, s,
+                                          voxel_mm=voxel_mm,
+                                          teacher_forcing=teacher_forcing)
                 if len(kp) < 32:
                     continue
                 samples.append((kp.cpu(), ks.cpu(), kl.cpu(), s))
             prog.update(task, advance=1)
-    console.print(f"  [green]S2 数据集: {len(samples)} patches[/]")
-    torch.save(samples, cache_path)
-    console.print(f"  [dim]缓存已保存: {cache_path}[/]")
+    mode_name = "教师强制" if teacher_forcing else "S1预测"
+    console.print(f"  [green]S2 数据集 ({mode_name}): {len(samples)} patches[/]")
+    torch.save(samples, actual_path)
+    console.print(f"  [dim]缓存已保存: {actual_path}[/]")
 
 
-def load_s2_loader(cache_path, batch_size, shuffle=False):
-    """从缓存加载 S2 数据集, 返回 DataLoader (变长 padding)."""
-    samples = torch.load(cache_path, weights_only=False)
+def load_s2_loader(cache_path, batch_size, shuffle=False, teacher_forcing=False):
+    """从缓存加载 S2 数据集, 返回 DataLoader (变长 padding).
+
+    Args:
+        teacher_forcing: if True, load the _tf variant of the cache
+    """
+    actual_path = cache_path
+    if teacher_forcing:
+        base, ext = os.path.splitext(cache_path)
+        actual_path = f"{base}_tf{ext}"
+    samples = torch.load(actual_path, weights_only=False)
 
     class _S2Dataset(Dataset):
         def __init__(self, data):
@@ -161,8 +193,13 @@ def load_s2_loader(cache_path, batch_size, shuffle=False):
 
 @torch.no_grad()
 def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
-                   voxel_mm=40.0):
-    """V2 验证: batch S1+S2 推理加速."""
+                   voxel_mm=40.0, teacher_forcing=False):
+    """V2 验证: batch S1+S2 推理加速.
+
+    Args:
+        teacher_forcing: if True, use GT labels for concrete filtering
+                         (evaluates S2's refinement on clean concrete masks)
+    """
     s1_model.eval()
     s2_model.eval()
     loader = loader_fn()
@@ -191,7 +228,8 @@ def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
             for b in range(B):
                 p, l, s = pts[b], lbl[b], scale[b].item()
                 spb = s1_probs[b]
-                kp, ks, kl = filter_patch(p, spb, l, s, voxel_mm=voxel_mm)
+                kp, ks, kl = filter_patch(p, spb, l, s, voxel_mm=voxel_mm,
+                                          teacher_forcing=teacher_forcing)
                 if len(kp) < 32:
                     continue
                 f_pts.append(kp.cpu())

@@ -98,6 +98,13 @@ def run_single(tag: str, radius: float, desc: str) -> dict:
 
     best_m = 0.0
     hist = {"epoch": [], "loss": [], "val_loss": [], "acc": [], "cm": []}
+    # 每类 IoU
+    for cls_name in S1_NAMES.values():
+        hist[f"iou_{cls_name}"] = []
+    # 每类 PRF
+    for cls_name in S1_NAMES.values():
+        for met in ["precision", "recall", "f1"]:
+            hist[f"prf_{cls_name}_{met}"] = []
 
     for ep in range(1, EPOCHS + 1):
         if ep > 1:
@@ -135,6 +142,15 @@ def run_single(tag: str, radius: float, desc: str) -> dict:
         hist["val_loss"].append(vl)
         hist["acc"].append(acc)
         hist["cm"].append(cm)
+        # 保存每类 IoU
+        for cls_name in S1_NAMES.values():
+            hist[f"iou_{cls_name}"].append(ious.get(cls_name, 0.0))
+        # 保存每类 PRF
+        for cls_name in S1_NAMES.values():
+            pm = prf.get(cls_name, {})
+            hist[f"prf_{cls_name}_precision"].append(pm.get("precision", 0.0))
+            hist[f"prf_{cls_name}_recall"].append(pm.get("recall", 0.0))
+            hist[f"prf_{cls_name}_f1"].append(pm.get("f1", 0.0))
         io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
         console.print(f"  {tag}: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}")
         if m > best_m:
