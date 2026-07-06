@@ -21,6 +21,7 @@ import os, json, time, argparse
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 
 from _common import (
     console, NUM_POINTS, BATCH_SIZE, LR, WEIGHT_DECAY,
@@ -35,6 +36,7 @@ from lib.pointnet2.doublephase import (
 
 EPOCHS = 80
 VOXEL_MM = 40.0       # 4cm 体素 (mm)
+VAL_INTERVAL = 2       # 每 N 轮验证一次
 
 ARCH_REGISTRY = ["pointnet++", "pointnet", "pointmlp", "pointnext"]
 
@@ -180,11 +182,17 @@ def main():
 
         s2_tl = tl / max(n_b, 1)
 
-        # ── 验证 (全管线) ──
-        c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
-            s1_model, s2_model, make_val, DEVICE, CLASS_NAMES, voxel_mm=VOXEL_MM,
-        )
-        print_v2(ep, s2_tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm, console=console)
+        # ── 验证 (每 VAL_INTERVAL 轮) ──
+        do_val = (ep == 1) or (ep % VAL_INTERVAL == 0)
+        if do_val:
+            c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
+                s1_model, s2_model, make_val, DEVICE, CLASS_NAMES, voxel_mm=VOXEL_MM,
+            )
+            print_v2(ep, s2_tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm, console=console)
+        else:
+            # 复用上次验证结果填充 history
+            c_ious = hist_c_ious; c_prf = hist_c_prf; c_acc = hist_c_acc
+            s_ious = hist_s_ious; rs_iou = hist_rs_iou; cm = hist_cm
 
         hist["epoch"].append(ep)
         hist["loss"].append(s2_tl)
@@ -205,7 +213,7 @@ def main():
         for tag in ["S2_噪声", "S2_钢筋", "S2_套筒"]:
             hist[f"s2pure_{tag}"].append(s_ious.get(tag, 0.0))
 
-        if cm > best_cm:
+        if do_val and cm > best_cm:
             best_cm = cm
             torch.save({
                 "epoch": ep,
@@ -216,6 +224,11 @@ def main():
                 "rs_iou": rs_iou,
             }, os.path.join(ckpt_dir, "best_s2.pth"))
             console.print(f"  [green]↑ 最佳 (cm={cm:.3f})[/]")
+
+        # 保存上次验证结果供非验证轮次复用
+        if do_val:
+            hist_c_ious = c_ious; hist_c_prf = c_prf; hist_c_acc = c_acc
+            hist_s_ious = s_ious; hist_rs_iou = rs_iou; hist_cm = cm
 
         _save_history(ckpt_dir, tag, hist)
 
