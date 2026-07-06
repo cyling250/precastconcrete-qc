@@ -85,6 +85,8 @@ def main():
     console.rule(f"[bold]{desc}[/]")
     console.print(f"[bold]Device:[/] {DEVICE}  S1 Arch: {arch}")
     console.print(f"  体素: {VOXEL_MM}mm (4cm), 仅混凝土降采样, 保留全部噪声+金属")
+    console.print(f"  训练/每轮验证: 教师强制 (GT 标签指导降采样)")
+    console.print(f"  全管线验证: 每 5 epoch (S1 预测指导降采样)")
 
     # ── 检查 S1 权重 ──
     if not os.path.exists(s1_ckpt_path):
@@ -104,17 +106,29 @@ def main():
         NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000,
     )
 
-    # ── 预计算 S2 数据集 ──
+    # ── 预计算 S2 数据集 (教师强制 + 全管线) ──
     console.rule("[bold]预计算 S2 数据集[/]")
-    build_s2_dataset(s1_model, make_train, train_cache, DEVICE, console, voxel_mm=VOXEL_MM)
-    build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console, voxel_mm=VOXEL_MM)
+    # 教师强制: 用 GT 标签降采样 (用于训练 + 每轮验证)
+    build_s2_dataset(s1_model, make_train, train_cache, DEVICE, console,
+                     voxel_mm=VOXEL_MM, teacher_forcing=True)
+    build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console,
+                     voxel_mm=VOXEL_MM, teacher_forcing=True)
+    # 全管线: 用 S1 预测降采样 (用于每 5 轮验证)
+    build_s2_dataset(s1_model, make_train, train_cache, DEVICE, console,
+                     voxel_mm=VOXEL_MM, teacher_forcing=False)
+    build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console,
+                     voxel_mm=VOXEL_MM, teacher_forcing=False)
 
-    train_loader = load_s2_loader(train_cache, BATCH_SIZE, shuffle=True)
-    val_loader = load_s2_loader(val_cache, BATCH_SIZE * 2, shuffle=False)
+    # 加载教师强制数据 (训练)
+    train_loader_tf = load_s2_loader(train_cache, BATCH_SIZE, shuffle=True,
+                                      teacher_forcing=True)
 
-    n_train = len(torch.load(train_cache, weights_only=False))
-    console.print(f"  [bold]训练:[/] {n_train} patches ({len(train_loader)} batch/epoch)")
-    console.print(f"  [bold]验证:[/] {len(torch.load(val_cache, weights_only=False))} patches ({len(val_loader)} batch)")
+    n_train = len(torch.load(train_cache.replace(".pt", "_tf.pt"), weights_only=False))
+    console.print(f"  [bold]训练 (教师强制):[/] {n_train} patches ({len(train_loader_tf)} batch/epoch)")
+    n_val_tf = len(torch.load(val_cache.replace(".pt", "_tf.pt"), weights_only=False))
+    console.print(f"  [bold]验证 (教师强制):[/] {n_val_tf} patches")
+    n_val_pipe = len(torch.load(val_cache, weights_only=False))
+    console.print(f"  [bold]验证 (全管线):[/] {n_val_pipe} patches (每 5 epoch)")
 
     # ── S2 模型 ──
     s2_model = Stage2Model().to(DEVICE)
@@ -129,7 +143,19 @@ def main():
     hist = {
         "epoch": [], "loss": [], "val_loss": [],
         "val_acc": [], "val_cm": [], "val_rs_iou": [],
+        "pipeline_miou": [], "pipeline_cm": [],
     }
+    # 教师强制验证: 每类 IoU + PRF (4 类)
+    for cls_name in CLASS_NAMES.values():
+        hist[f"tf_iou_{cls_name}"] = []
+        for met in ["precision", "recall", "f1"]:
+            hist[f"tf_prf_{cls_name}_{met}"] = []
+    # 全管线验证: 每类 IoU (每 5 epoch, 用前值填充)
+    for cls_name in CLASS_NAMES.values():
+        hist[f"pipe_iou_{cls_name}"] = []
+    # S2 纯指标 (噪声/钢筋/套筒)
+    for tag in ["S2_噪声", "S2_钢筋", "S2_套筒"]:
+        hist[f"tf_s2pure_{tag}"] = []
 
     for ep in range(1, EPOCHS + 1):
         if ep > 1:
@@ -143,9 +169,9 @@ def main():
             TextColumn("loss={task.fields[loss]:.4f}"),
             TimeRemainingColumn(), console=console,
         )
-        tt = prog.add_task("s2", total=len(train_loader), loss=0.0)
+        tt = prog.add_task("s2", total=len(train_loader_tf), loss=0.0)
         with prog:
-            for pts_pad, s1p_pad, lbl_pad, scale_bt in train_loader:
+            for pts_pad, s1p_pad, lbl_pad, scale_bt in train_loader_tf:
                 pts_pad = pts_pad.to(DEVICE)
                 s1p_pad = s1p_pad.to(DEVICE)
                 lbl_pad = lbl_pad.to(DEVICE)
@@ -169,9 +195,12 @@ def main():
 
         s2_tl = tl / max(n_b, 1)
 
+        # ── 每轮: 教师强制验证 ──
         c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
-            s1_model, s2_model, make_val, DEVICE, CLASS_NAMES, voxel_mm=VOXEL_MM,
+            s1_model, s2_model, make_val, DEVICE, CLASS_NAMES,
+            voxel_mm=VOXEL_MM, teacher_forcing=True,
         )
+        console.print(f"  [dim][教师强制][/] ", end="")
         print_v2(ep, s2_tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm, console=console)
 
         hist["epoch"].append(ep)
@@ -180,7 +209,18 @@ def main():
         hist["val_acc"].append(c_acc)
         hist["val_cm"].append(cm)
         hist["val_rs_iou"].append(rs_iou)
+        # 教师强制: 保存每类 IoU + PRF
+        for cls_name in CLASS_NAMES.values():
+            hist[f"tf_iou_{cls_name}"].append(c_ious.get(cls_name, 0.0))
+            pm = c_prf.get(cls_name, {})
+            hist[f"tf_prf_{cls_name}_precision"].append(pm.get("precision", 0.0))
+            hist[f"tf_prf_{cls_name}_recall"].append(pm.get("recall", 0.0))
+            hist[f"tf_prf_{cls_name}_f1"].append(pm.get("f1", 0.0))
+        # S2 纯指标
+        for tag in ["S2_噪声", "S2_钢筋", "S2_套筒"]:
+            hist[f"tf_s2pure_{tag}"].append(s_ious.get(tag, 0.0))
 
+        # 教师强制 cm 作为保存依据
         if cm > best_cm:
             best_cm = cm
             torch.save({
@@ -191,18 +231,40 @@ def main():
                 "c_ious": c_ious,
                 "rs_iou": rs_iou,
             }, os.path.join(ckpt_dir, "best_s2.pth"))
-            console.print(f"  [green]↑ 最佳 (cm={cm:.3f})[/]")
+            console.print(f"  [green]↑ 最佳 (教师强制 cm={cm:.3f})[/]")
+
+        # ── 每 5 轮: 全管线验证 (S1 预测) ──
+        if ep % 5 == 0:
+            pipe_ious, pipe_prf, pipe_acc, pipe_s, pipe_rs, pipe_cm = val_v2_simple(
+                s1_model, s2_model, make_val, DEVICE, CLASS_NAMES,
+                voxel_mm=VOXEL_MM, teacher_forcing=False,
+            )
+            hist["pipeline_miou"].append(pipe_ious.get("mIoU", 0))
+            hist["pipeline_cm"].append(pipe_cm)
+            # 全管线: 保存每类 IoU
+            for cls_name in CLASS_NAMES.values():
+                hist[f"pipe_iou_{cls_name}"].append(pipe_ious.get(cls_name, 0.0))
+            console.print(f"  [bold][全管线 ep{ep}][/] ", end="")
+            print_v2(ep, s2_tl, pipe_ious, pipe_prf, pipe_acc, pipe_s, pipe_rs, pipe_cm, console=console)
+        else:
+            hist["pipeline_miou"].append(hist["pipeline_miou"][-1] if hist["pipeline_miou"] else 0)
+            hist["pipeline_cm"].append(hist["pipeline_cm"][-1] if hist["pipeline_cm"] else 0)
+            # 填充全管线每类 IoU
+            for cls_name in CLASS_NAMES.values():
+                prev = hist[f"pipe_iou_{cls_name}"][-1] if hist[f"pipe_iou_{cls_name}"] else 0.0
+                hist[f"pipe_iou_{cls_name}"].append(prev)
 
         _save_history(ckpt_dir, tag, hist)
 
-    # ── 测试集 ──
+    # ── 测试集 (全管线) ──
     console.rule("[bold blue]测试集 (S1→S2 全管线)[/]")
     ckpt = os.path.join(ckpt_dir, "best_s2.pth")
     if os.path.exists(ckpt):
         sd = torch.load(ckpt, map_location=DEVICE)
         s2_model.load_state_dict(sd["model_state"])
         c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
-            s1_model, s2_model, make_test, DEVICE, CLASS_NAMES, voxel_mm=VOXEL_MM,
+            s1_model, s2_model, make_test, DEVICE, CLASS_NAMES,
+            voxel_mm=VOXEL_MM, teacher_forcing=False,
         )
         cio = " | ".join(f"{k}={v:.3f}" for k, v in c_ious.items() if k != "mIoU")
         console.print(f"  test_acc={c_acc:.3f} mIoU={c_ious['mIoU']:.3f} | [{cio}] | cm={cm:.3f} | rsIoU={rs_iou:.3f}")

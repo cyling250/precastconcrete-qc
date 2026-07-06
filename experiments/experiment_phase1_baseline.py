@@ -37,7 +37,10 @@ from _common import (
     create_dataloaders,
 )
 from lib.pointnet2.models import (
-    PointNetPlusPlus, PointNetSeg, PointMLPSeg, PointNeXtSeg,
+    PointNetPlusPlus,
+    PointNetSeg,
+    PointMLPSeg,
+    PointNeXtSeg,
     count_params,
 )
 from lib.pointnet2.metrics_utils import (
@@ -55,7 +58,7 @@ ARCH_REGISTRY = {
 }
 
 EPOCHS = 80
-EARLY_STOP_PATIENCE = 10      # cm 连续 10 epoch 不创新高则停止
+EARLY_STOP_PATIENCE = 10  # cm 连续 10 epoch 不创新高则停止
 LR = 1e-3
 S1_NAMES = {0: "噪声", 1: "混凝土", 2: "金属"}
 
@@ -63,6 +66,7 @@ S1_NAMES = {0: "噪声", 1: "混凝土", 2: "金属"}
 # ══════════════════════════════════════════════════════
 #  S1 模型 (固定半径, 仅 XYZ)
 # ══════════════════════════════════════════════════════
+
 
 class S1Model(nn.Module):
     """S1 三分类统一包装器 — 固定半径, 仅 XYZ, 可替换骨干."""
@@ -89,6 +93,7 @@ def make_s1_model(arch: str) -> S1Model:
 #  标签映射
 # ══════════════════════════════════════════════════════
 
+
 def _map_labels(lbl: torch.Tensor) -> torch.Tensor:
     """4 类标签 → 3 类: 钢筋(2)→金属(2), 套筒(3)→金属(2)."""
     clbl = lbl.clone()
@@ -99,6 +104,7 @@ def _map_labels(lbl: torch.Tensor) -> torch.Tensor:
 # ══════════════════════════════════════════════════════
 #  验证
 # ══════════════════════════════════════════════════════
+
 
 @torch.no_grad()
 def validate(model, loader_fn, criterion):
@@ -137,25 +143,43 @@ def validate(model, loader_fn, criterion):
 #  CL
 # ══════════════════════════════════════════════════════
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Phase 1: S1 三分类基线")
-    parser.add_argument("--arch", type=str, default="pointnet++",
-                        choices=list(ARCH_REGISTRY.keys()),
-                        help="骨干网络架构 (默认: pointnet++)")
-    parser.add_argument("--run-suffix", type=str, default="",
-                        help="自定义标签后缀 (用于区分不同运行, 不覆盖旧结果)")
-    parser.add_argument("--epochs", type=int, default=None,
-                        help="覆盖训练轮数 (默认使用 EPOCHS=80)")
-    parser.add_argument("--patience", type=int, default=None,
-                        help="早停耐心值 (默认使用 EARLY_STOP_PATIENCE=10)")
-    parser.add_argument("--resume", action="store_true",
-                        help="从 checkpoints 目录加载 best_s1.pth 断点续训")
+    parser.add_argument(
+        "--arch",
+        type=str,
+        default="pointnet++",
+        choices=list(ARCH_REGISTRY.keys()),
+        help="骨干网络架构 (默认: pointnet++)",
+    )
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        default="",
+        help="自定义标签后缀 (用于区分不同运行, 不覆盖旧结果)",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=None, help="覆盖训练轮数 (默认使用 EPOCHS=80)"
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="早停耐心值 (默认使用 EARLY_STOP_PATIENCE=10)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="从 checkpoints 目录加载 best_s1.pth 断点续训",
+    )
     return parser.parse_args()
 
 
 # ══════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════
+
 
 def main():
     args = parse_args()
@@ -167,14 +191,18 @@ def main():
     desc = f"Phase 1: S1 ({arch}, 噪声/混凝土/金属)"
 
     num_epochs = args.epochs if args.epochs is not None else EPOCHS
-    early_stop_patience = args.patience if args.patience is not None else EARLY_STOP_PATIENCE
+    early_stop_patience = (
+        args.patience if args.patience is not None else EARLY_STOP_PATIENCE
+    )
 
     CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, tag)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     set_seed(42)
     console.rule(f"[bold]{desc}[/]")
-    console.print(f"[bold]Device:[/] {DEVICE}  Arch: {arch}  Epochs: {num_epochs}  Patience: {early_stop_patience}")
+    console.print(
+        f"[bold]Device:[/] {DEVICE}  Arch: {arch}  Epochs: {num_epochs}  Patience: {early_stop_patience}"
+    )
     if run_suffix:
         console.print(f"[yellow]  运行标识: {run_suffix}, 保存至: {tag}[/]")
 
@@ -197,7 +225,6 @@ def main():
     best_ep = 0
     patience_counter = 0
     hist = {"epoch": [], "loss": [], "val_loss": [], "acc": [], "cm": []}
-    start_epoch = 1
 
     # ── 断点续训 ──
     ckpt_path = os.path.join(CHECKPOINT_DIR, "best_s1.pth")
@@ -210,6 +237,7 @@ def main():
             console.print(f"  [green]已加载权重: {ckpt_path}[/]")
             if os.path.exists(hist_path):
                 import json as _json
+
                 with open(hist_path) as f:
                     old_hist = _json.load(f)
                 completed = max(old_hist.get("epoch", [0]))
@@ -223,7 +251,9 @@ def main():
                 # 设置 scheduler 到正确位置
                 for _ in range(start_epoch - 1):
                     sch.step()
-                console.print(f"  [green]断点续训: 从 epoch {start_epoch} 继续 (已完成 {completed} epoch)[/]")
+                console.print(
+                    f"  [green]断点续训: 从 epoch {start_epoch} 继续 (已完成 {completed} epoch)[/]"
+                )
 
     for ep in range(start_epoch, num_epochs + 1):
         if ep > 1:
@@ -264,6 +294,15 @@ def main():
         hist["val_loss"].append(vl)
         hist["acc"].append(acc)
         hist["cm"].append(cm)
+        # 保存每类 IoU
+        for cls_name in S1_NAMES.values():
+            hist[f"iou_{cls_name}"].append(ious.get(cls_name, 0.0))
+        # 保存每类 PRF
+        for cls_name in S1_NAMES.values():
+            pm = prf.get(cls_name, {})
+            hist[f"prf_{cls_name}_precision"].append(pm.get("precision", 0.0))
+            hist[f"prf_{cls_name}_recall"].append(pm.get("recall", 0.0))
+            hist[f"prf_{cls_name}_f1"].append(pm.get("f1", 0.0))
         io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
         pr = " | ".join(
             f"{k}: P={v['precision']:.3f} R={v['recall']:.3f} F1={v['f1']:.3f}"
@@ -281,11 +320,15 @@ def main():
             console.print(f"  [green]↑ 最佳 (mIoU={m:.3f})[/]")
         else:
             patience_counter += 1
-            console.print(f"  [dim]早停计数: {patience_counter}/{early_stop_patience} (最佳 @ ep{best_ep}: mIoU={best_m:.3f})[/]")
+            console.print(
+                f"  [dim]早停计数: {patience_counter}/{early_stop_patience} (最佳 @ ep{best_ep}: mIoU={best_m:.3f})[/]"
+            )
         _save_history(CHECKPOINT_DIR, tag, hist)
 
         if patience_counter >= early_stop_patience:
-            console.print(f"[yellow]早停触发: {early_stop_patience} epoch 无提升, 停止训练 (最佳 @ ep{best_ep})[/]")
+            console.print(
+                f"[yellow]早停触发: {early_stop_patience} epoch 无提升, 停止训练 (最佳 @ ep{best_ep})[/]"
+            )
             break
 
     # ── 测试集 ──
