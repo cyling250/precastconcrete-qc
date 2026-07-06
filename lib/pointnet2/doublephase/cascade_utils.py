@@ -123,13 +123,14 @@ def build_s2_dataset(s1_model, loader_fn, cache_path, device, console,
         for pts, feat, lbl, scale in loader:
             pts, lbl, scale = pts.to(device), lbl.to(device), scale.to(device)
             B = pts.shape[0]
+            # 整 batch S1 推理 (比逐样本快 ~16 倍)
+            logits = s1_model(pts, scale=None)  # (B, N, 3)
+            s1_probs = F.softmax(logits, dim=-1)  # (B, N, 3)
             for b in range(B):
                 p, l, s = pts[b], lbl[b], scale[b].item()
-                # S1 推理
-                logits = s1_model(p.unsqueeze(0), scale=None)  # (1, N, 3)
-                s1_probs = F.softmax(logits, dim=-1).squeeze(0)  # (N, 3)
+                spb = s1_probs[b]  # (N, 3)
                 # 过滤 (混凝土降采样, 支持教师强制)
-                kp, ks, kl = filter_patch(p, s1_probs, l, s,
+                kp, ks, kl = filter_patch(p, spb, l, s,
                                           voxel_mm=voxel_mm,
                                           teacher_forcing=teacher_forcing)
                 if len(kp) < 32:

@@ -80,6 +80,7 @@ def main():
     s1_ckpt_path = os.path.join(_s1_ckpt_dir(arch), "best_s1.pth")
     train_cache = os.path.join(ckpt_dir, "s2_train.pt")
     val_cache = os.path.join(ckpt_dir, "s2_val.pt")
+    test_cache = os.path.join(ckpt_dir, "s2_test.pt")
 
     set_seed(42)
     console.rule(f"[bold]{desc}[/]")
@@ -106,29 +107,27 @@ def main():
         NUM_POINTS, BATCH_SIZE, keep_ratio=0.4, samples_per_epoch=3000,
     )
 
-    # ── 预计算 S2 数据集 (教师强制 + 全管线) ──
+    # ── 预计算 S2 数据集 ──
     console.rule("[bold]预计算 S2 数据集[/]")
-    # 教师强制: 用 GT 标签降采样 (用于训练 + 每轮验证)
+    # 教师强制 (GT 标签指导降采样): 训练/验证/测试集
     build_s2_dataset(s1_model, make_train, train_cache, DEVICE, console,
                      voxel_mm=VOXEL_MM, teacher_forcing=True)
     build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console,
                      voxel_mm=VOXEL_MM, teacher_forcing=True)
-    # 全管线: 用 S1 预测降采样 (用于每 5 轮验证)
-    build_s2_dataset(s1_model, make_train, train_cache, DEVICE, console,
+    build_s2_dataset(s1_model, make_test, test_cache, DEVICE, console,
+                     voxel_mm=VOXEL_MM, teacher_forcing=True)
+    # 全管线 (S1 预测指导降采样): 验证/测试集
+    build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console,
                      voxel_mm=VOXEL_MM, teacher_forcing=False)
-    build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console,
+    build_s2_dataset(s1_model, make_test, test_cache, DEVICE, console,
                      voxel_mm=VOXEL_MM, teacher_forcing=False)
 
-    # 加载教师强制数据 (训练)
+    # 加载教师强制训练数据
     train_loader_tf = load_s2_loader(train_cache, BATCH_SIZE, shuffle=True,
                                       teacher_forcing=True)
 
     n_train = len(torch.load(train_cache.replace(".pt", "_tf.pt"), weights_only=False))
     console.print(f"  [bold]训练 (教师强制):[/] {n_train} patches ({len(train_loader_tf)} batch/epoch)")
-    n_val_tf = len(torch.load(val_cache.replace(".pt", "_tf.pt"), weights_only=False))
-    console.print(f"  [bold]验证 (教师强制):[/] {n_val_tf} patches")
-    n_val_pipe = len(torch.load(val_cache, weights_only=False))
-    console.print(f"  [bold]验证 (全管线):[/] {n_val_pipe} patches (每 5 epoch)")
 
     # ── S2 模型 ──
     s2_model = Stage2Model().to(DEVICE)
