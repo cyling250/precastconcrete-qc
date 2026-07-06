@@ -17,7 +17,7 @@ from _common import (
     DEVICE, CHECKPOINT_BASE, NUM_CLASSES, CLASS_NAMES, set_seed,
     _serialize_metrics, _save_history, create_dataloaders,
 )
-from lib.pointnet2.models import PointNetPlusPlus, count_params
+from lib.pointnet2.models import PointMLPSeg, count_params
 from lib.pointnet2.metrics_utils import (
     compute_iou, compute_precision_recall_f1, compute_accuracy,
 )
@@ -31,7 +31,7 @@ EPOCHS = 120
 LR = 1e-3
 
 
-class SingleStageModel(PointNetPlusPlus):
+class SingleStageModel(PointMLPSeg):
     """单阶段 4 类 — 固定半径."""
     def forward(self, xyz, geo_features=None, scale=None):
         return super().forward(xyz, geo_features=None, scale=None)

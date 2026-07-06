@@ -16,8 +16,8 @@ from _common import (
 from experiment_phase1_baseline import make_s1_model
 from lib.pointnet2 import Stage2Model, val_v2_simple
 
-S1_CKPT = os.path.join(CHECKPOINT_BASE, "phase1_baseline", "best_s1.pth")
-S2_CKPT = os.path.join(CHECKPOINT_BASE, "phase2_baseline", "best_s2.pth")
+S1_CKPT = os.path.join(CHECKPOINT_BASE, "phase1_baseline_pointmlp", "best_s1.pth")
+S2_CKPT = os.path.join(CHECKPOINT_BASE, "phase2_baseline_pointmlp", "best_s2.pth")
 
 DENSITY_LEVELS = {
     "density_low": {
@@ -39,7 +39,7 @@ def load_baseline():
     if not os.path.exists(S1_CKPT) or not os.path.exists(S2_CKPT):
         console.print("[red]请先训练 baseline (phase1 + phase2)[/]")
         return None, None
-    s1 = make_s1_model("pointnet++").to(DEVICE)
+    s1 = make_s1_model("pointmlp").to(DEVICE)
     s1.load_state_dict(torch.load(S1_CKPT, map_location=DEVICE))
     s1.eval()
     s2 = Stage2Model().to(DEVICE)

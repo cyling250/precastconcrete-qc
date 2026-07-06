@@ -16,12 +16,12 @@ from _common import (
     DEVICE, CHECKPOINT_BASE, set_seed, _serialize_metrics, _save_history,
     create_dataloaders,
 )
-from lib.pointnet2.models import PointNetPlusPlus, count_params
+from lib.pointnet2.models import PointMLPSeg, count_params
 from lib.pointnet2.metrics_utils import (
     compute_iou, compute_precision_recall_f1, compute_accuracy,
 )
 
-TAG = "ablation_A1b"
+TAG = "ablation_A1b_pointmlp"
 DESC = "A1b — 无正样本平衡 (pos_ratio=1.0)"
 CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, TAG)
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -31,7 +31,7 @@ LR = 1e-3
 S1_NAMES = {0: "噪声", 1: "混凝土", 2: "金属"}
 
 
-class S1Model(PointNetPlusPlus):
+class S1Model(PointMLPSeg):
     def forward(self, xyz, geo_features=None, scale=None):
         return super().forward(xyz, geo_features=None, scale=None)
 

@@ -22,7 +22,7 @@ from lib.pointnet2.doublephase import (
     val_v2_simple,
 )
 
-S1_CKPT_DIR = os.path.join(CHECKPOINT_BASE, "phase1_baseline")
+S1_CKPT_DIR = os.path.join(CHECKPOINT_BASE, "phase1_baseline_pointmlp")
 
 VOXEL_CONFIGS = {
     "voxel_20mm": {"voxel_mm": 20.0, "desc": "S2 体素 20mm"},
@@ -34,7 +34,7 @@ EPOCHS_S2 = 60
 
 
 def run_voxel(tag: str, voxel_mm: float, desc: str):
-    ckpt_dir = os.path.join(CHECKPOINT_BASE, f"sensitivity_{tag}")
+    ckpt_dir = os.path.join(CHECKPOINT_BASE, f"sensitivity_{tag}_pointmlp")
     os.makedirs(ckpt_dir, exist_ok=True)
     train_cache = os.path.join(ckpt_dir, "s2_train.pt")
     val_cache = os.path.join(ckpt_dir, "s2_val.pt")
@@ -46,7 +46,7 @@ def run_voxel(tag: str, voxel_mm: float, desc: str):
     if not os.path.exists(s1_ckpt):
         console.print(f"[red]未找到 S1 权重 {s1_ckpt}[/]")
         return None
-    s1_model = make_s1_model("pointnet++").to(DEVICE)
+    s1_model = make_s1_model("pointmlp").to(DEVICE)
     s1_model.load_state_dict(torch.load(s1_ckpt, map_location=DEVICE))
     s1_model.eval()
     for p in s1_model.parameters():
