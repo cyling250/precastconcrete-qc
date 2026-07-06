@@ -148,6 +148,8 @@ def parse_args():
                         help="覆盖训练轮数 (默认使用 EPOCHS=80)")
     parser.add_argument("--patience", type=int, default=None,
                         help="早停耐心值 (默认使用 EARLY_STOP_PATIENCE=10)")
+    parser.add_argument("--resume", action="store_true",
+                        help="从 checkpoints 目录加载 best_s1.pth 断点续训")
     return parser.parse_args()
 
 
@@ -195,8 +197,35 @@ def main():
     best_ep = 0
     patience_counter = 0
     hist = {"epoch": [], "loss": [], "val_loss": [], "acc": [], "cm": []}
+    start_epoch = 1
 
-    for ep in range(1, num_epochs + 1):
+    # ── 断点续训 ──
+    ckpt_path = os.path.join(CHECKPOINT_DIR, "best_s1.pth")
+    hist_path = os.path.join(CHECKPOINT_DIR, f"history_{tag}.json")
+    if args.resume:
+        if not os.path.exists(ckpt_path):
+            console.print(f"[red]未找到 checkpoint: {ckpt_path}, 从头开始训练[/]")
+        else:
+            model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
+            console.print(f"  [green]已加载权重: {ckpt_path}[/]")
+            if os.path.exists(hist_path):
+                import json as _json
+                with open(hist_path) as f:
+                    old_hist = _json.load(f)
+                completed = max(old_hist.get("epoch", [0]))
+                start_epoch = completed + 1
+                # 恢复历史记录和最佳跟踪
+                hist = old_hist
+                cm_vals = hist.get("cm", [0.0])
+                if cm_vals:
+                    best_idx = int(max(range(len(cm_vals)), key=lambda i: cm_vals[i]))
+                    best_ep = hist["epoch"][best_idx]
+                # 设置 scheduler 到正确位置
+                for _ in range(start_epoch - 1):
+                    sch.step()
+                console.print(f"  [green]断点续训: 从 epoch {start_epoch} 继续 (已完成 {completed} epoch)[/]")
+
+    for ep in range(start_epoch, num_epochs + 1):
         if ep > 1:
             sch.step()
         model.train()
