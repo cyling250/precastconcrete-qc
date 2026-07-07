@@ -142,3 +142,5 @@
 | `SLEEVE_INNER_DIAM_RANGE`      | 连续范围 (25,55)         | `SLEEVE_SPEC_MAP` 映射表          | JGJ 355-2015 §3.1.2             |
 | 钢筋-套筒匹配关系              | 无关联                   | 自动按钢筋直径查套筒规格          | 工程实际                        |
 | `CONCRETE_ROUGHNESS` (新增)    | 完美光滑                 | σ=0.4mm 高斯粗糙度                | 模拟真实混凝土表面              |
+| `STANDARD_REBAR_DIAMETERS`     | 无                       | [16,18,20,22,25,28,32]            | GB 1499.2-2024 标准系列         |
+| `SLEEVE_SPEC_MAP`              | 连续范围                 | 外径/内径/长度映射表              | JG/T 398-2019 + 厂商规格        |
