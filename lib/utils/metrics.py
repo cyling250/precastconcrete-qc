@@ -1,7 +1,5 @@
 """
 点云分割指标: IoU, Precision/Recall/F1, Accuracy.
-
-复用函数, 可被 experiment_*.py 通用引用.
 """
 
 import numpy as np

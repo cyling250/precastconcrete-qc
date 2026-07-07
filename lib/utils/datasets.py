@@ -1,13 +1,9 @@
 """
-Mock 钢筋混凝土点云数据集.
+数据集加载器: GPU缓存训练加载器、验证/测试数据集、工厂函数.
 
-数据已由 DatasetGenerator 按构件类型分层拆分为 train/val/test 三部分,
-分别位于 mock/inuse/{train,val,test}/ 目录下.
-
-训练集: GpuCachedTrainLoader — 一次性生成全部 patches → GPU 缓存 → 每 epoch 显存中打乱索引
-验证/测试集: RandomValDataset — 纯随机采样, 一次性生成固定不变
-
-标签: 0=噪声(蓝), 1=混凝土(灰), 2=钢筋(红), 3=套筒(黄)
+训练集: GpuCachedTrainLoader — 物理球查询采样 + GPU缓存 + 正样本平衡
+验证/测试集: RandomValDataset — 固定种子球查询采样 (一次性生成不变)
+消融用: RandomSampleDataset — 纯随机采样 (无物理邻域约束)
 """
 
 import os, glob, time
@@ -16,13 +12,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from scipy.spatial import cKDTree
 
+from .common import TRAIN_DIR, VAL_DIR, TEST_DIR
 
-# ── 常量 ──
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TRAIN_DIR = os.path.join(_PROJECT_ROOT, "mock", "inuse", "train")
-VAL_DIR = os.path.join(_PROJECT_ROOT, "mock", "inuse", "val")
-TEST_DIR = os.path.join(_PROJECT_ROOT, "mock", "inuse", "test")
-PATCH_RADIUS_MM = 150.0  # 15cm 球查询半径 (物理空间 mm)
+PATCH_RADIUS_MM = 150.0  # 球查询半径 (mm)
 NUM_POINTS = 8192
 
 
@@ -48,11 +40,7 @@ def _load_geo_features(npz_path: str, num_points: int) -> np.ndarray:
 
 
 class GpuCachedTrainLoader:
-    """训练数据一次性生成并缓存在 GPU, 每 epoch 在显存中打乱索引.
-
-    消除 producer 进程和 epoch 间等待, 数据驻留 GPU 显存不占系统 RAM.
-    所有随机操作都使用确定性种子, 确保可复现.
-    """
+    """训练数据一次性生成并缓存在 GPU, 每 epoch 在显存中打乱索引."""
 
     def __init__(
         self,
@@ -73,7 +61,6 @@ class GpuCachedTrainLoader:
         self._samples_per_epoch = samples_per_epoch
 
         # ── 检查磁盘缓存 ──
-        # 缓存文件以 seed + 关键参数命名, 避免不同配置冲突
         cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
         cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
         cache_path = os.path.join(cache_dir, cache_name)
@@ -87,22 +74,31 @@ class GpuCachedTrainLoader:
             self.lbl = state["lbl"].to(device, non_blocking=True)
             self.scale = state["scale"].to(device, non_blocking=True)
             self.N_per_epoch = len(self.pts)
-            mb = (self.pts.numel() + self.geo.numel() + self.lbl.numel()) * 4 / 1024 / 1024
-            print(f"  [缓存] 从 {cache_path} 加载 {self.N_per_epoch} patches ({mb:.0f}MB, {time.time()-_t0:.0f}s)")
+            mb = (
+                (self.pts.numel() + self.geo.numel() + self.lbl.numel())
+                * 4
+                / 1024
+                / 1024
+            )
+            print(
+                f"  [缓存] 从 {cache_path} 加载 {self.N_per_epoch} patches ({mb:.0f}MB, {time.time() - _t0:.0f}s)"
+            )
             _loaded_from_cache = True
 
         if not _loaded_from_cache:
-            self._generate_patches(file_paths, num_points, keep_ratio, seed, device, pos_ratio)
+            self._generate_patches(
+                file_paths, num_points, keep_ratio, seed, device, pos_ratio
+            )
 
         self._loaded_from_cache = _loaded_from_cache
 
-    def _generate_patches(self, file_paths, num_points, keep_ratio, seed, device, pos_ratio):
+    def _generate_patches(
+        self, file_paths, num_points, keep_ratio, seed, device, pos_ratio
+    ):
         """生成 patches 并缓存到磁盘 + GPU."""
         rng = np.random.default_rng(seed)
 
         # ── 1. 加载全部文件 + 建 KDTree ──
-        from rich.progress import Progress
-
         _t0 = time.time()
         cache = []
         for f in file_paths:
@@ -111,17 +107,27 @@ class GpuCachedTrainLoader:
             lbl = data["labels"].astype(np.int64)
             geo = _load_geo_features(f, len(pts))
             tree = cKDTree(pts)
-            cache.append({
-                "points": pts, "geo": geo, "labels": lbl,
-                "tree": tree, "basename": os.path.basename(f), "N": len(pts),
-            })
+            cache.append(
+                {
+                    "points": pts,
+                    "geo": geo,
+                    "labels": lbl,
+                    "tree": tree,
+                    "basename": os.path.basename(f),
+                    "N": len(pts),
+                }
+            )
         n_total = sum(c["N"] for c in cache)
-        print(f"  [加载] {len(cache)} 文件已缓存 (≈{n_total/1e6:.1f}M 点, {time.time() - _t0:.0f}s)")
+        print(
+            f"  [加载] {len(cache)} 文件已缓存 (≈{n_total / 1e6:.1f}M 点, {time.time() - _t0:.0f}s)"
+        )
 
-        # ── 2. 生成 patches (带进度条) ──
+        # ── 2. 生成 patches ──
         _t0 = time.time()
         all_patches = []
         file_order = rng.permutation(len(cache))
+
+        from rich.progress import Progress
 
         with Progress() as progress:
             file_task = progress.add_task("[cyan]生成 patches", total=len(file_order))
@@ -153,16 +159,13 @@ class GpuCachedTrainLoader:
                                 chosen_set.add(int(i))
                                 if len(chosen_set) >= num_points:
                                     break
-                        chosen = np.array(
-                            list(chosen_set)[:num_points], dtype=np.int64
-                        )
+                        chosen = np.array(list(chosen_set)[:num_points], dtype=np.int64)
                     if len(chosen) < num_points:
                         n_fail += 1
                         continue
                     n_fail = 0
                     available[chosen] = False
 
-                    # 归一化到单位球
                     patch_pts = pts[chosen]
                     center = patch_pts.mean(axis=0)
                     patch_pts = patch_pts - center
@@ -171,38 +174,46 @@ class GpuCachedTrainLoader:
 
                     n_pos = (lbl[chosen] == 2).sum() + (lbl[chosen] == 3).sum()
                     all_patches.append(
-                        (patch_pts, geo[chosen], lbl[chosen], scale_mm, n_pos / num_points)
+                        (
+                            patch_pts,
+                            geo[chosen],
+                            lbl[chosen],
+                            scale_mm,
+                            n_pos / num_points,
+                        )
                     )
                     n_from_this_file += 1
 
                 progress.update(
-                    file_task, advance=1,
+                    file_task,
+                    advance=1,
                     description=f"[cyan]{c['basename'][:40]} ({n_from_this_file} patches)",
                 )
 
-        # ── 3. 筛选: 按 pos_ratio 控制正样本patch比例 ──
+        # ── 3. 正样本平衡筛选 ──
         rng.shuffle(all_patches)
         has_pos = [p for p in all_patches if p[4] > 0]
         no_pos = [p for p in all_patches if p[4] == 0]
-        n_concrete_target = max(0, min(len(no_pos), int(len(has_pos) / pos_ratio - len(has_pos))))
+        n_concrete_target = max(
+            0, min(len(no_pos), int(len(has_pos) / pos_ratio - len(has_pos)))
+        )
         filtered = has_pos + no_pos[:n_concrete_target]
         rng.shuffle(filtered)
         self.N_per_epoch = len(filtered)
 
-        # 打印分布统计
         pos_ratios = np.array([p[4] for p in all_patches])
         sorted_ratios = np.sort(pos_ratios)[::-1]
         print(
             f"  [生成] {len(all_patches)} 总patches → {self.N_per_epoch} 训练patches "
             f"({len(has_pos)} 含钢筋/套筒 + {n_concrete_target} 纯混凝土, "
-            f"ratio={len(has_pos)/max(1,self.N_per_epoch):.2f}, "
-            f"{time.time()-_t0:.0f}s)"
+            f"ratio={len(has_pos) / max(1, self.N_per_epoch):.2f}, "
+            f"{time.time() - _t0:.0f}s)"
         )
         print(
             f"  [分布] max={sorted_ratios[0]:.3f} "
-            f"P90={sorted_ratios[max(0,int(len(sorted_ratios)*0.1))]:.3f} "
-            f"P75={sorted_ratios[max(0,int(len(sorted_ratios)*0.25))]:.3f} "
-            f"P50={sorted_ratios[max(0,int(len(sorted_ratios)*0.5))]:.3f}"
+            f"P90={sorted_ratios[max(0, int(len(sorted_ratios) * 0.1))]:.3f} "
+            f"P75={sorted_ratios[max(0, int(len(sorted_ratios) * 0.25))]:.3f} "
+            f"P50={sorted_ratios[max(0, int(len(sorted_ratios) * 0.5))]:.3f}"
         )
 
         # ── 4. 转换到 GPU tensor ──
@@ -210,29 +221,36 @@ class GpuCachedTrainLoader:
         self.pts = torch.stack([torch.from_numpy(p[0]) for p in filtered]).to(device)
         self.geo = torch.stack([torch.from_numpy(p[1]) for p in filtered]).to(device)
         self.lbl = torch.stack([torch.from_numpy(p[2]) for p in filtered]).to(device)
-        self.scale = torch.tensor([p[3] for p in filtered], dtype=torch.float32, device=device)
+        self.scale = torch.tensor(
+            [p[3] for p in filtered], dtype=torch.float32, device=device
+        )
         mb = (self.pts.numel() + self.geo.numel() + self.lbl.numel()) * 4 / 1024 / 1024
-        print(f"  [GPU] {self.N_per_epoch} patches {mb:.0f}MB → {device} ({time.time()-_t0:.0f}s)")
+        print(
+            f"  [GPU] {self.N_per_epoch} patches {mb:.0f}MB → {device} ({time.time() - _t0:.0f}s)"
+        )
 
         # ── 5. 保存磁盘缓存 ──
         _t0 = time.time()
         cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
         cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
         cache_path = os.path.join(cache_dir, cache_name)
-        torch.save({
-            "pts": self.pts.cpu(),
-            "geo": self.geo.cpu(),
-            "lbl": self.lbl.cpu(),
-            "scale": self.scale.cpu(),
-        }, cache_path)
-        print(f"  [缓存] 保存至 {cache_path} ({time.time()-_t0:.0f}s)")
+        torch.save(
+            {
+                "pts": self.pts.cpu(),
+                "geo": self.geo.cpu(),
+                "lbl": self.lbl.cpu(),
+                "scale": self.scale.cpu(),
+            },
+            cache_path,
+        )
+        print(f"  [缓存] 保存至 {cache_path} ({time.time() - _t0:.0f}s)")
 
     def __iter__(self):
         n_use = self._samples_per_epoch if self._samples_per_epoch else self.N_per_epoch
         n_use = min(n_use, self.N_per_epoch)
         indices = torch.randperm(self.N_per_epoch, device=self._device)[:n_use]
         for i in range(0, n_use, self.batch_size):
-            idx = indices[i: i + self.batch_size]
+            idx = indices[i : i + self.batch_size]
             yield (self.pts[idx], self.geo[idx], self.lbl[idx], self.scale[idx])
 
     def __len__(self):
@@ -242,22 +260,14 @@ class GpuCachedTrainLoader:
 
 
 # ═══════════════════════════════════════════════════════
-#  验证/测试集: 纯随机采样 (保持原始分布)
+#  验证/测试集
 # ═══════════════════════════════════════════════════════
 
 
 class RandomValDataset(Dataset):
-    """验证/测试集: 邻域采样 (ball query + KNN), 不做钢筋筛选.
+    """验证/测试集: 固定种子球查询采样 (一次性生成不变)."""
 
-    一次性生成, 固定不变 (epoch 间一致, 公平对比).
-    """
-
-    def __init__(
-        self,
-        split: str = "val",
-        num_points: int = 8192,
-        seed: int = 42,
-    ):
+    def __init__(self, split: str = "val", num_points: int = 8192, seed: int = 42):
         assert split in ("val", "test"), "RandomValDataset 用于 val 或 test"
         data_dir = VAL_DIR if split == "val" else TEST_DIR
         file_paths = _list_npz_files(data_dir)
@@ -274,8 +284,8 @@ class RandomValDataset(Dataset):
             self.lbl = state["lbl"]
             self.scale = state["scale"]
             n = len(self.pts)
-            self.patches = list(range(n))  # dummy list for __len__
-            print(f"  [缓存] {split}: {n} patches 已加载 ({time.time()-_t0:.0f}s)")
+            self.patches = list(range(n))
+            print(f"  [缓存] {split}: {n} patches 已加载 ({time.time() - _t0:.0f}s)")
             return
 
         rng = np.random.default_rng(seed)
@@ -310,16 +320,13 @@ class RandomValDataset(Dataset):
                             chosen_set.add(int(i))
                             if len(chosen_set) >= num_points:
                                 break
-                    chosen = np.array(
-                        list(chosen_set)[:num_points], dtype=np.int64
-                    )
+                    chosen = np.array(list(chosen_set)[:num_points], dtype=np.int64)
                 if len(chosen) < num_points:
                     n_fail += 1
                     continue
                 n_fail = 0
                 available[chosen] = False
 
-                # 归一化
                 patch_pts = pts[chosen]
                 center = patch_pts.mean(axis=0)
                 patch_pts = patch_pts - center
@@ -338,17 +345,17 @@ class RandomValDataset(Dataset):
         geo_t = torch.stack([torch.from_numpy(p[1]) for p in self.patches])
         lbl_t = torch.stack([torch.from_numpy(p[2]) for p in self.patches])
         scale_t = torch.tensor([p[3] for p in self.patches], dtype=torch.float32)
-        torch.save({"pts": pts_t, "geo": geo_t, "lbl": lbl_t, "scale": scale_t}, cache_path)
+        torch.save(
+            {"pts": pts_t, "geo": geo_t, "lbl": lbl_t, "scale": scale_t}, cache_path
+        )
         print(f"  [缓存] 保存至 {cache_path}")
 
     def __len__(self):
         return len(self.patches)
 
     def __getitem__(self, idx):
-        # 磁盘缓存模式: 从 tensor 直接取
         if hasattr(self, "pts") and isinstance(self.patches[0], int):
             return (self.pts[idx], self.geo[idx], self.lbl[idx], self.scale[idx])
-        # 生成模式: 从 patches 列表取
         pts, geo, lbl, scale = self.patches[idx]
         return (
             torch.from_numpy(pts),
@@ -359,17 +366,12 @@ class RandomValDataset(Dataset):
 
 
 # ═══════════════════════════════════════════════════════
-#  随机采样数据集 (用于 A2 消融实验)
+#  随机采样数据集 (消融 A1a)
 # ═══════════════════════════════════════════════════════
 
 
 class RandomSampleDataset(Dataset):
-    """随机采样数据集 — 无球查询, 无物理邻域约束.
-
-    对每个文件直接随机选取 num_points 个点, 归一化到单位球面.
-    每文件生成 num_samples_per_file 个随机块, 使总 patch 数与基线一致.
-    用于 A2 消融实验: 验证物理感知局部块采样的必要性.
-    """
+    """纯随机采样 (无球查询), 用于消融实验."""
 
     def __init__(
         self,
@@ -402,7 +404,7 @@ class RandomSampleDataset(Dataset):
 
         print(
             f"[RandomSampleDataset] {len(self.patches)} samples "
-            f"(来自 {len(file_paths)} 文件, 每文件 {num_samples_per_file} 个随机块, 无物理采样)"
+            f"(来自 {len(file_paths)} 文件, 每文件 {num_samples_per_file} 个随机块)"
         )
 
     def __len__(self):
@@ -435,23 +437,7 @@ def create_dataloaders(
     random_sample: bool = False,
     val_batch_mult: int = 1,
 ):
-    """返回 (make_train_loader, make_val_loader, make_test_loader).
-
-    默认模式:
-      训练集: GpuCachedTrainLoader — 物理球查询采样 + GPU 缓存 + 类别平衡筛选.
-      验证/测试集: RandomValDataset — 固定种子物理球查询采样.
-
-    random_sample=True 模式 (A2 消融):
-      训练/验证/测试集: RandomSampleDataset — 无物理邻域约束的纯随机采样.
-
-    Args:
-        file_filter: 可选过滤函数, 接收文件路径返回 bool.
-        only_test: 若 True, 仅创建测试集 (评估已保存模型时节省内存).
-        pos_ratio: 含钢筋/套筒的 patch 在训练集中占比目标 (默认 0.8).
-        samples_per_epoch: 每 epoch 随机采样的 patch 数, None 表示全部使用.
-        random_sample: 若 True, 使用纯随机采样替代物理球查询采样.
-        val_batch_mult: 验证/测试集 batch_size 倍数 (默认 1, 设为 4 则 val batch=4x).
-    """
+    """返回 (make_train_loader, make_val_loader, make_test_loader)."""
     train_files = _list_npz_files(TRAIN_DIR) if not only_test else []
     val_files = _list_npz_files(VAL_DIR) if not only_test else []
     test_files = _list_npz_files(TEST_DIR)
@@ -460,23 +446,26 @@ def create_dataloaders(
         val_files = sorted(f for f in val_files if file_filter(f))
         test_files = sorted(f for f in test_files if file_filter(f))
 
-    print(f"[DataLoader] 训练: {len(train_files)} 文件 | "
-          f"验证: {len(val_files)} 文件 | 测试: {len(test_files)} 文件")
+    print(
+        f"[DataLoader] 训练: {len(train_files)} 文件 | "
+        f"验证: {len(val_files)} 文件 | 测试: {len(test_files)} 文件"
+    )
 
     if only_test:
         if random_sample:
-            test_dataset = RandomSampleDataset(
-                test_files, num_points, seed=seed + 200,
-            )
+            test_dataset = RandomSampleDataset(test_files, num_points, seed=seed + 200)
         else:
             test_dataset = RandomValDataset(
-                split="test", num_points=num_points, seed=seed + 200,
+                split="test", num_points=num_points, seed=seed + 200
             )
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
-                num_workers=0, pin_memory=True,
+                test_dataset,
+                batch_size=batch_size * val_batch_mult,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
             )
 
         def make_dummy():
@@ -485,48 +474,54 @@ def create_dataloaders(
         return make_dummy, make_dummy, make_test_loader
 
     if random_sample:
-        # ── A2 消融模式: 纯随机采样, 无物理球查询 ──
-        train_dataset = RandomSampleDataset(
-            train_files, num_points, seed=seed,
-        )
-        val_dataset = RandomSampleDataset(
-            val_files, num_points, seed=seed + 100,
-        )
-        test_dataset = RandomSampleDataset(
-            test_files, num_points, seed=seed + 200,
-        )
+        train_dataset = RandomSampleDataset(train_files, num_points, seed=seed)
+        val_dataset = RandomSampleDataset(val_files, num_points, seed=seed + 100)
+        test_dataset = RandomSampleDataset(test_files, num_points, seed=seed + 200)
 
         def make_train_loader():
             return DataLoader(
-                train_dataset, batch_size=batch_size, shuffle=True,
-                num_workers=0, pin_memory=True,
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=0,
+                pin_memory=True,
             )
 
         def make_val_loader():
             return DataLoader(
-                val_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
-                num_workers=0, pin_memory=True,
+                val_dataset,
+                batch_size=batch_size * val_batch_mult,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
             )
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
-                num_workers=0, pin_memory=True,
+                test_dataset,
+                batch_size=batch_size * val_batch_mult,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
             )
     else:
-        # ── 默认模式: 物理球查询采样 ──
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         train_loader = GpuCachedTrainLoader(
-            train_files, num_points, batch_size,
-            keep_ratio=keep_ratio, seed=seed, device=device,
-            pos_ratio=pos_ratio, samples_per_epoch=samples_per_epoch,
+            train_files,
+            num_points,
+            batch_size,
+            keep_ratio=keep_ratio,
+            seed=seed,
+            device=device,
+            pos_ratio=pos_ratio,
+            samples_per_epoch=samples_per_epoch,
         )
 
         val_dataset = RandomValDataset(
-            split="val", num_points=num_points, seed=seed + 100,
+            split="val", num_points=num_points, seed=seed + 100
         )
         test_dataset = RandomValDataset(
-            split="test", num_points=num_points, seed=seed + 200,
+            split="test", num_points=num_points, seed=seed + 200
         )
 
         def make_train_loader():
@@ -534,14 +529,20 @@ def create_dataloaders(
 
         def make_val_loader():
             return DataLoader(
-                val_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
-                num_workers=0, pin_memory=True,
+                val_dataset,
+                batch_size=batch_size * val_batch_mult,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
             )
 
         def make_test_loader():
             return DataLoader(
-                test_dataset, batch_size=batch_size * val_batch_mult, shuffle=False,
-                num_workers=0, pin_memory=True,
+                test_dataset,
+                batch_size=batch_size * val_batch_mult,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
             )
 
     return make_train_loader, make_val_loader, make_test_loader
