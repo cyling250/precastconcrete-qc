@@ -31,7 +31,7 @@ from _common import (
 from experiment_phase1_baseline import make_s1_model
 from lib.pointnet2.doublephase import (
     Stage2Model, build_s2_dataset, load_s2_loader,
-    val_v2_simple, print_v2,
+    val_s2_cached, val_v2_simple, print_v2,
 )
 
 EPOCHS = 80
@@ -117,6 +117,7 @@ def main():
                      voxel_mm=VOXEL_MM)
 
     train_loader = load_s2_loader(train_cache, BATCH_SIZE, shuffle=True)
+    val_loader = load_s2_loader(val_cache, BATCH_SIZE * 2, shuffle=False)
 
     n_train = len(torch.load(train_cache, weights_only=False))
     console.print(f"  [bold]训练:[/] {n_train} patches ({len(train_loader)} batch/epoch)")
@@ -185,8 +186,8 @@ def main():
         # ── 验证 (每 VAL_INTERVAL 轮) ──
         do_val = (ep == 1) or (ep % VAL_INTERVAL == 0)
         if do_val:
-            c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
-                s1_model, s2_model, make_val, DEVICE, CLASS_NAMES, voxel_mm=VOXEL_MM,
+            c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_s2_cached(
+                s2_model, val_loader, DEVICE, CLASS_NAMES,
             )
             print_v2(ep, s2_tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm, console=console)
         else:

@@ -12,6 +12,7 @@ from .cascade_utils import (
     build_s2_dataset,
     load_s2_loader,
     val_v2_simple,
+    val_s2_cached,
     print_v2,
     S2_NAMES,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "build_s2_dataset",
     "load_s2_loader",
     "val_v2_simple",
+    "val_s2_cached",
     "print_v2",
     "S2_NAMES",
 ]

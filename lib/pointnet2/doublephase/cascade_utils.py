@@ -163,7 +163,7 @@ def load_s2_loader(cache_path, batch_size, shuffle=False):
 @torch.no_grad()
 def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
                    voxel_mm=40.0):
-    """V2 验证: batch S1+S2 推理加速."""
+    """V2 验证: batch S1+S2 推理加速（S1 实时推理）. """
     s1_model.eval()
     s2_model.eval()
     loader = loader_fn()
@@ -226,6 +226,99 @@ def val_v2_simple(s1_model, s2_model, loader_fn, device, class_names,
 
                 combined = s2_pred.clone()
                 s1_conc = (f_s1pred[i].to(device) == 1)
+                combined[s1_conc] = 1
+
+                all_cp.append(combined.cpu())
+                all_ct.append(kl.cpu())
+
+                non_conc = kl != 1
+                if non_conc.any():
+                    all_sp.append(s2_pred[non_conc].cpu())
+                    all_st.append(kl[non_conc].cpu())
+
+            prog.update(vtask, advance=1)
+
+    if not all_cp:
+        z = {k: 0.0 for k in list(class_names.values()) + ["mIoU"]}
+        z2 = {k: {"precision": 0, "recall": 0, "f1": 0} for k in class_names.values()}
+        return z, z2, 0.0, z, z2, 0.0, 0.0
+
+    cp = torch.cat(all_cp)
+    ct = torch.cat(all_ct)
+    c_ious = compute_iou(cp, ct, class_names)
+    c_acc = compute_accuracy(cp, ct)
+    c_prf = compute_precision_recall_f1(cp, ct, class_names)
+
+    if all_sp:
+        sp = torch.cat(all_sp)
+        st = torch.cat(all_st)
+        s_ious = {}
+        for cls_id, cls_name in [(0, "噪声(S2)"), (2, "钢筋(S2)"), (3, "套筒(S2)")]:
+            mask_t = (st == cls_id)
+            mask_p = (sp == cls_id)
+            inter = (mask_t & mask_p).sum().float()
+            union = (mask_t | mask_p).sum().float()
+            s_ious[cls_name] = (inter / (union + 1e-10)).item()
+        s_ious["mIoU"] = sum(s_ious.get(n, 0) for n in ["噪声(S2)", "钢筋(S2)", "套筒(S2)"]) / 3.0
+    else:
+        s_ious = {"mIoU": 0.0}
+        for n in ["噪声(S2)", "钢筋(S2)", "套筒(S2)"]:
+            s_ious[n] = 0.0
+
+    rs_inter = ((cp == 2) & (ct == 2)).sum().float() + ((cp == 3) & (ct == 3)).sum().float()
+    rs_union = ((cp == 2) | (ct == 2)).sum().float() + ((cp == 3) | (ct == 3)).sum().float()
+    rs_iou = (rs_inter / (rs_union + 1e-10)).item()
+
+    cm = (c_ious.get("混凝土", 0) + c_ious.get("钢筋", 0) + c_ious.get("套筒", 0)) / 3.0
+
+    return c_ious, c_prf, c_acc, s_ious, rs_iou, cm
+
+
+@torch.no_grad()
+def val_s2_cached(s2_model, s2_loader, device, class_names):
+    """只跑 S2 验证（S1 已预计算缓存，不跑 S1 推理）.
+
+    Args:
+        s2_model: Stage2Model
+        s2_loader: DataLoader 从 load_s2_loader 返回 (pts_pad, s1p_pad, lbl_pad, scale_bt)
+        device: torch device
+        class_names: {0: ..., 1: ..., 2: ..., 3: ...}
+    Returns:
+        (c_ious, c_prf, c_acc, s_ious, rs_iou, cm) 与 val_v2_simple 相同
+    """
+    s2_model.eval()
+
+    all_sp, all_st = [], []
+    all_cp, all_ct = [], []
+
+    from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+    from ..metrics_utils import compute_accuracy
+
+    prog = Progress(
+        TextColumn("[bold]V2-cached[/]"), BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(), console=__import__("rich").console.Console(),
+    )
+    vtask = prog.add_task("val", total=len(s2_loader))
+
+    with torch.no_grad(), prog:
+        for pts_pad, s1p_pad, lbl_pad, scale_bt in s2_loader:
+            pts_pad = pts_pad.to(device)
+            s1p_pad = s1p_pad.to(device)
+            lbl_pad = lbl_pad.to(device)
+            scale_bt = scale_bt.to(device)
+            B = pts_pad.shape[0]
+
+            s2_logits = s2_model(pts_pad, s1p_pad, scale=scale_bt)
+
+            for b in range(B):
+                n_real = (lbl_pad[b] != -1).sum().item()
+                s2_pred = s2_logits[b, :n_real].argmax(dim=-1)
+                kl = lbl_pad[b, :n_real]
+                s1_pred = s1p_pad[b, :n_real].argmax(dim=-1)
+
+                combined = s2_pred.clone()
+                s1_conc = (s1_pred == 1)
                 combined[s1_conc] = 1
 
                 all_cp.append(combined.cpu())
