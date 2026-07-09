@@ -1,7 +1,7 @@
 """
 敏感性 S2 — S2 体素降采样大小: 改变 VOXEL_MM, 其余与 phase2 baseline 一致.
 
-测试体素: 20mm / 40mm(基线) / 80mm
+测试体素: 20~120mm, 步长 10mm (不跑 40mm)
 """
 
 import sys, os, json
@@ -11,9 +11,8 @@ from experiments._s2_trainer import train_s2_voxel
 from lib.utils import console, CHECKPOINT_BASE, set_seed
 
 VOXEL_CONFIGS = {
-    "voxel_20mm": {"voxel_mm": 20.0, "desc": "S2 体素 20mm"},
-    "voxel_40mm": {"voxel_mm": 40.0, "desc": "S2 体素 40mm (基线)"},
-    "voxel_80mm": {"voxel_mm": 80.0, "desc": "S2 体素 80mm"},
+    f"voxel_{v}mm": {"voxel_mm": float(v), "desc": f"S2 体素 {v}mm"}
+    for v in range(20, 121, 10) if v != 40
 }
 
 
@@ -25,7 +24,7 @@ def main():
     for tag, cfg in VOXEL_CONFIGS.items():
         r = train_s2_voxel(
             arch="pointmlp", voxel_mm=cfg["voxel_mm"],
-            tag=tag, desc=cfg["desc"],
+            num_epochs=50, tag=tag, desc=cfg["desc"],
         )
         if r:
             results[tag] = r
