@@ -309,7 +309,7 @@ def train_s2_voxel(
     )
     build_s2_dataset(s1_model, make_val, val_cache, DEVICE, console, voxel_mm=voxel_mm)
     train_loader = load_s2_loader(train_cache, 16, shuffle=True)
-    val_loader = load_s2_loader(val_cache, 32, shuffle=False)
+    val_loader = load_s2_loader(val_cache, 16, shuffle=False)
 
     s2_model = Stage2Model().to(DEVICE)
     criterion = nn.CrossEntropyLoss(ignore_index=-1)
@@ -329,13 +329,11 @@ def train_s2_voxel(
             tag=tag,
             forward_and_labels_fn=_s2_forward_and_labels,
         )
-        c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
-            s1_model,
+        c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_s2_cached(
             s2_model,
-            make_val,
+            val_loader,
             DEVICE,
             CLASS_NAMES,
-            voxel_mm=voxel_mm,
         )
         console.print(
             f"  {tag} ep{ep:03d}: tl={tl:.4f} acc={c_acc:.3f} mIoU={c_ious.get('mIoU', 0):.3f} cm={cm:.3f} rsIoU={rs_iou:.3f}"
