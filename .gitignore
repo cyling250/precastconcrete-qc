@@ -156,3 +156,5 @@ old.zip
 experiments/checkpoints
 experiments/old_checkpoints
 scripts/
+docs/figures/
+docs/pdfs/

@@ -5,6 +5,7 @@
 """
 
 import sys, os, json
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from experiments._s1_trainer import train_s1_radius
@@ -12,7 +13,6 @@ from lib.utils import console, CHECKPOINT_BASE, set_seed
 
 S1_RADII = {
     "S1_100": {"radius": 100.0, "desc": "局部块半径 100mm"},
-    "S1_150": {"radius": 150.0, "desc": "局部块半径 150mm (基线)"},
     "S1_200": {"radius": 200.0, "desc": "局部块半径 200mm"},
     "S1_300": {"radius": 300.0, "desc": "局部块半径 300mm"},
 }
@@ -25,8 +25,11 @@ def main():
     results = {}
     for tag, cfg in S1_RADII.items():
         result = train_s1_radius(
-            arch="pointmlp", radius=cfg["radius"],
-            tag=tag, desc=cfg["desc"],
+            arch="pointmlp",
+            radius=cfg["radius"],
+            tag=tag,
+            desc=cfg["desc"],
+            num_epochs=50,
         )
         results[tag] = result
 
@@ -36,9 +39,11 @@ def main():
     console.print(header)
     console.print("-" * len(header))
     for tag, r in results.items():
-        console.print(f"{r['radius_mm']:.0f}mm | {r['best_val_miou']:>8.3f} | "
-                      f"{r.get('iou/噪声', 0):>8.3f} | {r.get('iou/混凝土', 0):>8.3f} | "
-                      f"{r.get('iou/金属', 0):>8.3f} | {r.get('test_cm', 0):>8.3f}")
+        console.print(
+            f"{r['radius_mm']:.0f}mm | {r['best_val_miou']:>8.3f} | "
+            f"{r.get('iou/噪声', 0):>8.3f} | {r.get('iou/混凝土', 0):>8.3f} | "
+            f"{r.get('iou/金属', 0):>8.3f} | {r.get('test_cm', 0):>8.3f}"
+        )
 
     with open(os.path.join(CHECKPOINT_BASE, "sensitivity_S1_summary.json"), "w") as f:
         json.dump(results, f, indent=2)

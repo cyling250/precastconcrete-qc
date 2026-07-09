@@ -20,7 +20,7 @@ CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, TAG)
 def main():
     train_s1(
         arch="pointmlp",
-        num_epochs=80,
+        num_epochs=120,
         tag=TAG,
         desc=DESC,
         ckpt_dir=CHECKPOINT_DIR,
