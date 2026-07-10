@@ -271,12 +271,16 @@ def train_s2_voxel(
     num_epochs: int = 60,
     tag: str = "voxel",
     desc: str = "S2 体素敏感性",
+    ckpt_dir: str = None,
 ):
-    """S2 体素大小敏感性训练 (简化版)."""
+    """S2 体素大小敏感性训练 (保存完整 history 与 summary)."""
     from lib.utils import CHECKPOINT_BASE
 
     set_seed(42)
-    ckpt_dir = os.path.join(CHECKPOINT_BASE, f"sensitivity_{tag}_pointmlp")
+    if ckpt_dir is None:
+        ckpt_dir = os.path.join(
+            CHECKPOINT_BASE, "sensitivity_S2_voxel", f"{tag}_{arch}"
+        )
     os.makedirs(ckpt_dir, exist_ok=True)
     train_cache = os.path.join(ckpt_dir, "s2_train.pt")
     val_cache = os.path.join(ckpt_dir, "s2_val.pt")
@@ -316,8 +320,27 @@ def train_s2_voxel(
     opt = torch.optim.AdamW(s2_model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sch = CosineAnnealingLR(opt, T_max=num_epochs)
 
+    # ── 断点续训 (自动检测) ──
+    ckpt_path = os.path.join(ckpt_dir, "best_s2.pth")
+    start_ep = 1
     best_cm = 0.0
-    for ep in range(1, num_epochs + 1):
+    hist = build_history_template_s2()
+
+    if os.path.exists(ckpt_path):
+        saved_ep = load_checkpoint(ckpt_path, s2_model, opt, sch)
+        start_ep = saved_ep + 1
+        hist_path = os.path.join(ckpt_dir, f"history_{tag}.json")
+        if os.path.exists(hist_path):
+            with open(hist_path) as f:
+                hist = json.load(f)
+            cm_vals = hist.get("val_cm", [])
+            if cm_vals:
+                best_cm = max(cm_vals)
+        console.print(
+            f"  [green]断点续训: 从 epoch {start_ep} 继续 (最佳 cm={best_cm:.3f})[/]"
+        )
+
+    for ep in range(start_ep, num_epochs + 1):
         if ep > 1:
             sch.step()
         tl = train_one_epoch(
@@ -338,18 +361,26 @@ def train_s2_voxel(
         console.print(
             f"  {tag} ep{ep:03d}: tl={tl:.4f} acc={c_acc:.3f} mIoU={c_ious.get('mIoU', 0):.3f} cm={cm:.3f} rsIoU={rs_iou:.3f}"
         )
+
+        fill_history_s2(hist, ep, tl, c_ious, c_prf, c_acc, s_ious, rs_iou, cm)
+
         if cm > best_cm:
             best_cm = cm
             save_checkpoint(
-                os.path.join(ckpt_dir, "best_s2.pth"),
+                ckpt_path,
                 s2_model,
                 opt,
                 sch,
                 epoch=ep,
                 cm=cm,
+                c_ious=c_ious,
+                rs_iou=rs_iou,
             )
+            console.print(f"  [green]↑ 最佳 (cm={cm:.3f})[/]")
 
-    load_checkpoint(os.path.join(ckpt_dir, "best_s2.pth"), s2_model)
+        save_history(ckpt_dir, tag, hist)
+
+    load_checkpoint(ckpt_path, s2_model)
     c_ious, c_prf, c_acc, s_ious, rs_iou, cm = val_v2_simple(
         s1_model,
         s2_model,
@@ -361,9 +392,16 @@ def train_s2_voxel(
     console.print(
         f"  [bold]test: acc={c_acc:.3f} mIoU={c_ious.get('mIoU', 0):.3f} cm={cm:.3f} rsIoU={rs_iou:.3f}[/]"
     )
-    return {
+
+    summary = {
         "voxel_mm": voxel_mm,
+        "arch": arch,
+        "best_cm": best_cm,
         "test_miou": c_ious.get("mIoU", 0),
         "test_cm": cm,
         "test_rs_iou": rs_iou,
     }
+    summary.update(serialize_metrics(c_ious, c_prf))
+    with open(os.path.join(ckpt_dir, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
