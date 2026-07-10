@@ -2,6 +2,7 @@
 敏感性 S1 — 局部块半径: 改变 PATCH_RADIUS_MM, 其余与 phase1 baseline 一致.
 
 测试半径: 10 mm 到 190 mm, 步长 20 mm
+所有 checkpoint 统一放在 sensitivity_S1_radius/ 下.
 """
 
 import sys, os, json
@@ -11,7 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from experiments._s1_trainer import train_s1_radius
 from lib.utils import console, CHECKPOINT_BASE, set_seed, load_history
 
-# 10 到 100, 步长 20 => 10, 30, 50, 70, 90
+BASE_DIR = os.path.join(CHECKPOINT_BASE, "sensitivity_S1_radius")
+
 S1_RADII = {
     f"S1_{r}": {"radius": float(r), "desc": f"局部块半径 {r}mm"}
     for r in range(10, 201, 20)
@@ -21,8 +23,6 @@ S1_RADII = {
 def is_trained(ckpt_dir: str, min_epochs: int = 50) -> bool:
     """检查 checkpoint 是否已完成训练 (≥min_epochs 轮历史)."""
     hist = load_history(ckpt_dir, os.path.basename(ckpt_dir))
-    if hist is None:
-        hist = load_history(ckpt_dir, "S1_" + os.path.basename(ckpt_dir).split("_")[1])
     if hist and len(hist.get("epoch", [])) >= min_epochs:
         return True
     return False
@@ -30,11 +30,12 @@ def is_trained(ckpt_dir: str, min_epochs: int = 50) -> bool:
 
 def main():
     set_seed(42)
+    os.makedirs(BASE_DIR, exist_ok=True)
     console.rule("[bold]S1 — 局部块半径敏感性[/]")
 
     results = {}
     for tag, cfg in sorted(S1_RADII.items()):
-        ckpt_dir = os.path.join(CHECKPOINT_BASE, f"sensitivity_{tag}_pointmlp")
+        ckpt_dir = os.path.join(BASE_DIR, f"{tag}_pointmlp")
         if is_trained(ckpt_dir):
             summary_path = os.path.join(ckpt_dir, "summary.json")
             if os.path.exists(summary_path):
@@ -49,6 +50,7 @@ def main():
             tag=tag,
             desc=cfg["desc"],
             num_epochs=50,
+            ckpt_dir=ckpt_dir,
         )
         if result:
             results[tag] = result
@@ -65,9 +67,9 @@ def main():
             f"{r.get('iou/金属', 0):>8.3f} | {r.get('test_cm', 0):>8.3f}"
         )
 
-    with open(os.path.join(CHECKPOINT_BASE, "sensitivity_S1_summary.json"), "w") as f:
+    with open(os.path.join(BASE_DIR, "summary.json"), "w") as f:
         json.dump(results, f, indent=2)
-    console.print(f"[bold green]S1 完成![/]")
+    console.print(f"[bold green]S1 完成! (summary: {BASE_DIR}\\summary.json)[/]")
 
 
 if __name__ == "__main__":

@@ -14,12 +14,22 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from lib.utils import (
-    console, DEVICE, LR, WEIGHT_DECAY, S1_NAMES,
-    set_seed, map_labels, serialize_metrics,
+    console,
+    DEVICE,
+    LR,
+    WEIGHT_DECAY,
+    S1_NAMES,
+    set_seed,
+    map_labels,
+    serialize_metrics,
     create_dataloaders,
-    train_one_epoch, validate_one_epoch,
-    build_history_template_s1, fill_history_s1, save_history,
-    save_checkpoint, load_checkpoint,
+    train_one_epoch,
+    validate_one_epoch,
+    build_history_template_s1,
+    fill_history_s1,
+    save_history,
+    save_checkpoint,
+    load_checkpoint,
 )
 from experiments._config import get_backbone_cls
 
@@ -50,7 +60,9 @@ def make_s1_model(arch: str = "pointmlp") -> S1Model:
 def validate_s1(model, loader_fn, criterion):
     """S1 3类验证."""
     return validate_one_epoch(
-        model, loader_fn, criterion,
+        model,
+        loader_fn,
+        criterion,
         class_names=S1_NAMES,
         cm_fn=lambda ious: (ious["混凝土"] + ious["金属"]) / 2,
         forward_and_labels_fn=_s1_forward_and_labels,
@@ -72,6 +84,7 @@ def train_s1(
         dataloader_kwargs: 传递给 create_dataloaders 的额外参数.
     """
     from lib.utils import CHECKPOINT_BASE
+
     set_seed(42)
     dataloader_kwargs = dataloader_kwargs or {}
 
@@ -84,7 +97,11 @@ def train_s1(
 
     # ── 数据 ──
     make_train, make_val, make_test = create_dataloaders(
-        8192, 16, keep_ratio=0.4, samples_per_epoch=3000, **dataloader_kwargs,
+        8192,
+        16,
+        keep_ratio=0.4,
+        samples_per_epoch=3000,
+        **dataloader_kwargs,
     )
 
     # ── 模型 ──
@@ -116,7 +133,9 @@ def train_s1(
             if cm_vals:
                 best_m = max(cm_vals)
                 best_ep = cm_vals.index(best_m) + 1
-        console.print(f"  [green]断点续训: 从 epoch {start_ep} 继续 (最佳 cm={best_m:.3f} @ ep{best_ep})[/]")
+        console.print(
+            f"  [green]断点续训: 从 epoch {start_ep} 继续 (最佳 cm={best_m:.3f} @ ep{best_ep})[/]"
+        )
 
     # ── 训练循环 ──
     for ep in range(start_ep, num_epochs + 1):
@@ -124,7 +143,12 @@ def train_s1(
             sch.step()
 
         tl = train_one_epoch(
-            model, make_train(), criterion, opt, ep, tag=tag,
+            model,
+            make_train(),
+            criterion,
+            opt,
+            ep,
+            tag=tag,
             forward_and_labels_fn=_s1_forward_and_labels,
         )
         vl, ious, acc, prf, cm = validate_s1(model, make_val, criterion)
@@ -133,7 +157,9 @@ def train_s1(
         fill_history_s1(hist, ep, tl, vl, ious, acc, prf, cm)
 
         io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-        console.print(f"  {tag}: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}")
+        console.print(
+            f"  {tag}: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}"
+        )
 
         if m > best_m:
             best_m = m
@@ -143,12 +169,16 @@ def train_s1(
             console.print(f"  [green]↑ 最佳 (mIoU={m:.3f})[/]")
         else:
             patience_counter += 1
-            console.print(f"  [dim]早停计数: {patience_counter}/{early_stop_patience} (最佳 @ ep{best_ep}: mIoU={best_m:.3f})[/]")
+            console.print(
+                f"  [dim]早停计数: {patience_counter}/{early_stop_patience} (最佳 @ ep{best_ep}: mIoU={best_m:.3f})[/]"
+            )
 
         save_history(ckpt_dir, tag, hist)
 
         if patience_counter >= early_stop_patience:
-            console.print(f"[yellow]早停触发: {early_stop_patience} epoch 无提升 (最佳 @ ep{best_ep})[/]")
+            console.print(
+                f"[yellow]早停触发: {early_stop_patience} epoch 无提升 (最佳 @ ep{best_ep})[/]"
+            )
             break
 
     # ── 测试集 ──
@@ -156,15 +186,25 @@ def train_s1(
     load_checkpoint(ckpt_path, model)
     tl, ious, acc, prf, cm = validate_s1(model, make_test, criterion)
     tio = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-    console.print(f"test_loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{tio}] | cm={cm:.3f}")
+    console.print(
+        f"test_loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{tio}] | cm={cm:.3f}"
+    )
 
     with open(os.path.join(ckpt_dir, "summary.json"), "w") as f:
-        json.dump({
-            "arch": arch, "best_miou": best_m,
-            "test_miou": ious["mIoU"], "test_cm": cm,
-            **serialize_metrics(ious, prf),
-        }, f, indent=2)
-    console.print(f"[bold green]完成! 最佳 mIoU={best_m:.3f}, 测试 mIoU={ious['mIoU']:.3f}[/]")
+        json.dump(
+            {
+                "arch": arch,
+                "best_miou": best_m,
+                "test_miou": ious["mIoU"],
+                "test_cm": cm,
+                **serialize_metrics(ious, prf),
+            },
+            f,
+            indent=2,
+        )
+    console.print(
+        f"[bold green]完成! 最佳 mIoU={best_m:.3f}, 测试 mIoU={ious['mIoU']:.3f}[/]"
+    )
 
 
 def train_s1_radius(
@@ -173,23 +213,32 @@ def train_s1_radius(
     num_epochs: int = 120,
     tag: str = "S1_radius",
     desc: str = "S1 半径敏感性",
+    ckpt_dir: str = None,
 ):
     """S1 半径敏感性训练."""
     import lib.utils.datasets as ds_module
     from lib.utils import CHECKPOINT_BASE
 
     set_seed(42)
-    ckpt_dir = os.path.join(CHECKPOINT_BASE, f"sensitivity_{tag}_pointmlp")
+    if ckpt_dir is None:
+        ckpt_dir = os.path.join(
+            CHECKPOINT_BASE, "sensitivity_S1_radius", f"{tag}_{arch}"
+        )
     os.makedirs(ckpt_dir, exist_ok=True)
     console.rule(f"[bold]{desc}: 半径={radius:.0f}mm[/]")
 
     ds_module.PATCH_RADIUS_MM = radius
     make_train, make_val, make_test = create_dataloaders(
-        8192, 16, keep_ratio=0.4, samples_per_epoch=3000,
+        8192,
+        16,
+        keep_ratio=0.4,
+        samples_per_epoch=3000,
     )
 
     model = make_s1_model(arch).to(DEVICE)
-    console.print(f"  [dim]参数: {sum(p.numel() for p in model.parameters()):,} | 半径: {radius:.0f}mm[/]")
+    console.print(
+        f"  [dim]参数: {sum(p.numel() for p in model.parameters()):,} | 半径: {radius:.0f}mm[/]"
+    )
 
     criterion = nn.CrossEntropyLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -205,7 +254,12 @@ def train_s1_radius(
             sch.step()
 
         tl = train_one_epoch(
-            model, make_train(), criterion, opt, ep, tag=tag,
+            model,
+            make_train(),
+            criterion,
+            opt,
+            ep,
+            tag=tag,
             forward_and_labels_fn=_s1_forward_and_labels,
         )
         vl, ious, acc, prf, cm = validate_s1(model, make_val, criterion)
@@ -214,13 +268,17 @@ def train_s1_radius(
         fill_history_s1(hist, ep, tl, vl, ious, acc, prf, cm)
 
         io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-        console.print(f"  {tag}: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}")
+        console.print(
+            f"  {tag}: tl={tl:.4f} vl={vl:.4f} acc={acc:.3f} mIoU={m:.3f} | [{io}] | cm={cm:.3f}"
+        )
 
         if m > best_m:
             best_m = m
             best_ep = ep
             patience_counter = 0
-            save_checkpoint(os.path.join(ckpt_dir, "best_s1.pth"), model, opt, sch, epoch=ep)
+            save_checkpoint(
+                os.path.join(ckpt_dir, "best_s1.pth"), model, opt, sch, epoch=ep
+            )
             console.print(f"  [green]↑ 最佳 (mIoU={m:.3f})[/]")
         else:
             patience_counter += 1
@@ -233,11 +291,15 @@ def train_s1_radius(
     load_checkpoint(os.path.join(ckpt_dir, "best_s1.pth"), model)
     tl, ious, acc, prf, cm = validate_s1(model, make_test, criterion)
     io = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
-    console.print(f"  test: loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{io}] | cm={cm:.3f}")
+    console.print(
+        f"  test: loss={tl:.4f} acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{io}] | cm={cm:.3f}"
+    )
 
     summary = {
-        "radius_mm": radius, "best_val_miou": best_m,
-        "test_miou": ious["mIoU"], "test_cm": cm,
+        "radius_mm": radius,
+        "best_val_miou": best_m,
+        "test_miou": ious["mIoU"],
+        "test_cm": cm,
         **serialize_metrics(ious, prf),
     }
     with open(os.path.join(ckpt_dir, "summary.json"), "w") as f:
