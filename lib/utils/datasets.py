@@ -62,7 +62,7 @@ class GpuCachedTrainLoader:
 
         # ── 检查磁盘缓存 ──
         cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
-        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
+        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}_r{int(PATCH_RADIUS_MM)}.pt"
         cache_path = os.path.join(cache_dir, cache_name)
         _loaded_from_cache = False
 
@@ -232,7 +232,7 @@ class GpuCachedTrainLoader:
         # ── 5. 保存磁盘缓存 ──
         _t0 = time.time()
         cache_dir = os.path.dirname(file_paths[0]) if file_paths else TRAIN_DIR
-        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}.pt"
+        cache_name = f".gpu_cache_s{seed}_n{num_points}_k{keep_ratio}_p{pos_ratio}_r{int(PATCH_RADIUS_MM)}.pt"
         cache_path = os.path.join(cache_dir, cache_name)
         torch.save(
             {
@@ -274,7 +274,7 @@ class RandomValDataset(Dataset):
         self.num_points = num_points
 
         # ── 检查磁盘缓存 ──
-        cache_name = f".val_cache_{split}_s{seed}_n{num_points}.pt"
+        cache_name = f".val_cache_{split}_s{seed}_n{num_points}_r{int(PATCH_RADIUS_MM)}.pt"
         cache_path = os.path.join(data_dir, cache_name)
         if os.path.exists(cache_path):
             _t0 = time.time()
