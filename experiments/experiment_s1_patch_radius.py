@@ -1,7 +1,7 @@
 """
 敏感性 S1 — 局部块半径: 改变 PATCH_RADIUS_MM, 其余与 phase1 baseline 一致.
 
-测试半径: 10 mm 到 100 mm, 步长 20 mm
+测试半径: 10 mm 到 190 mm, 步长 20 mm
 """
 
 import sys, os, json
@@ -14,7 +14,7 @@ from lib.utils import console, CHECKPOINT_BASE, set_seed, load_history
 # 10 到 100, 步长 20 => 10, 30, 50, 70, 90
 S1_RADII = {
     f"S1_{r}": {"radius": float(r), "desc": f"局部块半径 {r}mm"}
-    for r in range(10, 101, 20)
+    for r in range(10, 201, 20)
 }
 
 
