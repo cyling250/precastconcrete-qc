@@ -1,7 +1,7 @@
 """
 敏感性 S1 — 局部块半径: 改变 PATCH_RADIUS_MM, 其余与 phase1 baseline 一致.
 
-测试半径: 10 mm 到 190 mm, 步长 20 mm
+测试半径: 100, 150, 200, 300, 400 mm
 所有 checkpoint 统一放在 sensitivity_S1_radius/ 下.
 """
 
@@ -16,7 +16,7 @@ BASE_DIR = os.path.join(CHECKPOINT_BASE, "sensitivity_S1_radius")
 
 S1_RADII = {
     f"S1_{r}": {"radius": float(r), "desc": f"局部块半径 {r}mm"}
-    for r in range(10, 201, 20)
+    for r in [100, 200, 300, 400]
 }
 
 
