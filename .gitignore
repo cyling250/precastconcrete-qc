@@ -154,8 +154,10 @@ mock/
 old/
 old.zip
 /checkpoints*
+out/checkpoints/
 experiments/checkpoints
 experiments/old_checkpoints
+temp_scripts/
 scripts/
 docs/figures/
 docs/pdfs/

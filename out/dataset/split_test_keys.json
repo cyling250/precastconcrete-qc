@@ -1,0 +1,19 @@
+{
+  "n_keys": 14,
+  "keys": [
+    "l_composite_beam__006",
+    "l_composite_beam__007",
+    "l_shaped_column__003",
+    "l_shaped_column__004",
+    "l_shaped_column__005",
+    "rectangular_column__001",
+    "rectangular_column__009",
+    "rectangular_composite_beam__004",
+    "rectangular_composite_beam__006",
+    "rectangular_composite_beam__008",
+    "rectangular_composite_beam__010",
+    "t_beam__006",
+    "t_beam__007",
+    "t_composite_beam__004"
+  ]
+}
