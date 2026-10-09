@@ -21,6 +21,7 @@ from .common import (
     VAL_DIR,
     TEST_DIR,
     set_seed,
+    anchor_project_path,
     map_labels,
     serialize_metrics,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "VAL_DIR",
     "TEST_DIR",
     "set_seed",
+    "anchor_project_path",
     "map_labels",
     "serialize_metrics",
     # metrics

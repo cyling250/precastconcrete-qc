@@ -150,14 +150,12 @@ output/
 
 abaqus/
 
+# 数据与产物: mock 为数据集, out 为全部结果数据(权重/评测/日志/绘图 CSV), 只留本地不入库
 mock/
-old/
-old.zip
-/checkpoints*
-out/checkpoints/
-experiments/checkpoints
-experiments/old_checkpoints
+out/
+temp/
 temp_scripts/
-scripts/
+/checkpoints*
+output/
 docs/figures/
 docs/pdfs/

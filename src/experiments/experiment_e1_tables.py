@@ -31,7 +31,7 @@ from experiments._a2_trainer import SingleStageModel, validate_a2
 from lib.cascade import Stage2Model, val_v2_simple
 from lib.utils import (
     console, DEVICE, CLASS_NAMES, CHECKPOINT_BASE,
-    create_dataloaders, load_checkpoint,
+    create_dataloaders, load_checkpoint, anchor_project_path,
 )
 
 # 手稿原值 (单次运行, 旧口径), 用于新旧并列核对
@@ -138,6 +138,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="out/E1")
     args = ap.parse_args()
+    args.out = anchor_project_path(args.out)
     os.makedirs(args.out, exist_ok=True)
 
     import torch.nn as nn

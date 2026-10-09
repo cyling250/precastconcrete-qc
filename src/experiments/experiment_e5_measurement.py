@@ -38,6 +38,7 @@ from lib.measurement import (                                  # noqa: E402
 from lib.pointcloud_generator._builder import BUILDERS, _filter_internal_rebar  # noqa: E402
 from lib.pointcloud_generator._config import DENSITY_MAP, NOISE_LEVELS  # noqa: E402
 from lib.pointcloud_generator._noise import apply_noise        # noqa: E402
+from lib.utils import anchor_project_path                      # noqa: E402
 
 # ── 受控实验矩阵 (构造参数全部已知) ──
 # 4 个构件/配筋组合 × 3 组 (箍筋间距, 钢筋直径) × 4 档噪声 × 2 种子
@@ -110,11 +111,12 @@ def main():
     ap.add_argument("--deep", action="store_true",
                     help="阶段 2: 接入 PC-CascadeNet(pointmlp) 与 M3 预测")
     args = ap.parse_args()
+    args.out = anchor_project_path(args.out)
     os.makedirs(args.out, exist_ok=True)
 
     deep_models = (None, None, None)
     if args.deep:
-        from experiments.experiment_e5_deep import load_deep_models
+        from experiments._e5_deep_predict import load_deep_models
         deep_models = load_deep_models()  # (s1, s2, m3_model) or partially None
 
     results = []
@@ -142,7 +144,7 @@ def main():
 
                     # ③ 深度模型 (阶段 2); 只在补片覆盖的点集上测量, 与评测口径一致
                     if args.deep and deep_models[0] is not None:
-                        from experiments.experiment_e5_deep import predict_cascade, predict_m3
+                        from experiments._e5_deep_predict import predict_cascade, predict_m3
                         pred_cas, mask_c = predict_cascade(pts, deep_models[0], deep_models[1])
                         if mask_c.any():
                             row["cascade"] = measure_component(

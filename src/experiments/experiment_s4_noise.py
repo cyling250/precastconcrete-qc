@@ -131,6 +131,48 @@ def _load_cascade(s1_arch="pointmlp"):
     return s1, s2
 
 
+def _load_m3():
+    """M3 单阶段四类模型 (A2 消融 checkpoint)."""
+    from experiments._a2_trainer import SingleStageModel
+    ckpt = os.path.join(CHECKPOINT_BASE, "ablation_A2", "best.pth")
+    if not os.path.exists(ckpt):
+        console.print(f"[red]未找到 checkpoint: {ckpt}[/]")
+        return None
+    model = SingleStageModel(num_classes=4, in_channels=3).to(DEVICE)
+    state = torch.load(ckpt, map_location=DEVICE)
+    model.load_state_dict(state.get("model_state", state))
+    model.eval()
+    return model
+
+
+def _evaluate_m3(model, data_dir, desc):
+    """M3 单阶段 4 类在指定数据目录上的评测 (口径与 _a2_trainer.validate_a2 一致)."""
+    from experiments._a2_trainer import validate_a2
+    import torch.nn as nn
+
+    console.print(f"\n[bold cyan]▶ {desc}[/]")
+    old_test_dir = ds_module.TEST_DIR
+    ds_module.TEST_DIR = data_dir
+    try:
+        _, _, make_test = create_dataloaders(8192, 16, keep_ratio=0.4, only_test=True)
+        criterion = nn.CrossEntropyLoss()
+        _loss, ious, acc, prf, cm = validate_a2(model, make_test, criterion)
+    finally:
+        ds_module.TEST_DIR = old_test_dir
+    cio = " | ".join(f"{k}={v:.3f}" for k, v in ious.items() if k != "mIoU")
+    console.print(
+        f"  acc={acc:.3f} mIoU={ious['mIoU']:.3f} | [{cio}] | cm={cm:.3f}"
+    )
+    return {
+        "test_mIoU": ious["mIoU"],
+        "test_cm": cm,
+        "test_rs_iou": None,  # 单阶段四类无 rs 口径
+        "test_acc": acc,
+        **{f"iou/{k}": v for k, v in ious.items() if k != "mIoU"},
+        **{f"prf/{k1}/{k2}": v2 for k1, v1 in prf.items() for k2, v2 in v1.items()},
+    }
+
+
 def _evaluate(s1, s2, data_dir, desc):
     console.print(f"\n[bold cyan]▶ {desc}[/]")
     old_test_dir = ds_module.TEST_DIR
@@ -165,11 +207,15 @@ def _print_summary(title, results):
     hdr = f"{'噪声强度':>10} | {'mIoU':>8} | {'cm':>8} | {'rsIoU':>8} | {'噪声':>8} | {'混凝土':>8} | {'钢筋':>8} | {'套筒':>8}"
     console.print(hdr)
     console.print("-" * len(hdr))
+
+    def _fmt(v):
+        return f"{v:>8.3f}" if isinstance(v, (int, float)) else f"{'-':>8}"
+
     for tag, r in results.items():
         console.print(
-            f"{tag:>10} | {r['test_mIoU']:>8.3f} | {r['test_cm']:>8.3f} | {r['test_rs_iou']:>8.3f} | "
-            f"{r.get('iou/噪声', 0):>8.3f} | {r.get('iou/混凝土', 0):>8.3f} | "
-            f"{r.get('iou/钢筋', 0):>8.3f} | {r.get('iou/套筒', 0):>8.3f}"
+            f"{tag:>10} | {_fmt(r['test_mIoU'])} | {_fmt(r['test_cm'])} | {_fmt(r['test_rs_iou'])} | "
+            f"{_fmt(r.get('iou/噪声', 0))} | {_fmt(r.get('iou/混凝土', 0))} | "
+            f"{_fmt(r.get('iou/钢筋', 0))} | {_fmt(r.get('iou/套筒', 0))}"
         )
 
 
@@ -177,22 +223,33 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--all-keys", action="store_true",
                     help="不过滤测试划分 (全部 70 构型, 旧口径/泄漏对照)")
+    ap.add_argument("--model", choices=["cascade", "m3"], default="cascade",
+                    help="评测对象: cascade=级联全管线 (默认), m3=单阶段四类 (A2)")
     args = ap.parse_args()
-    suffix = "_allkeys" if args.all_keys else ""
+    # 测试数据与模型无关 (S4_noise / S4_noise_allkeys), 两类模型共用同一批数据;
+    # 汇总文件按模型加 _m3 后缀区分
+    data_suffix = "_allkeys" if args.all_keys else ""
+    summary_suffix = data_suffix + ("_m3" if args.model == "m3" else "")
 
     set_seed(42)
-    console.rule("[bold]S4 — 噪声水平敏感性[/]")
+    console.rule(f"[bold]S4 — 噪声水平敏感性 (model={args.model})[/]")
     console.print(
         f"  噪声强度: 0.0(低)~1.0(高), 步长 {NOISE_STEP}  (固定密度={FIXED_DENSITY})"
         + ("  [yellow]旧口径: 全部 70 构型 (泄漏对照)[/]" if args.all_keys else "")
     )
 
-    s1, s2 = _load_cascade("pointmlp")
-    if s1 is None:
-        return
+    if args.model == "m3":
+        model = _load_m3()
+        if model is None:
+            return
+        evaluate = lambda data_dir, desc: _evaluate_m3(model, data_dir, desc)
+    else:
+        s1, s2 = _load_cascade("pointmlp")
+        if s1 is None:
+            return
+        evaluate = lambda data_dir, desc: _evaluate(s1, s2, data_dir, desc)
 
-    base_dir = os.path.join(SENSITIVITY_BASE, f"S4_noise{suffix}")
-
+    base_dir = os.path.join(SENSITIVITY_BASE, f"S4_noise{data_suffix}")
     results = {}
     for t in NOISE_INTENSITIES:
         tag = f"noise_{t:.1f}"
@@ -200,12 +257,13 @@ def main():
         _generate_test_data(data_dir, t, all_keys=args.all_keys)
         results[tag] = {
             "noise_intensity": t,
-            **_evaluate(s1, s2, data_dir, f"噪声强度 {t:.1f}"),
+            **evaluate(data_dir, f"噪声强度 {t:.1f}"),
         }
 
-    _print_summary("S4 — 噪声水平敏感性", results)
-    with open(os.path.join(SENSITIVITY_BASE, f"S4_summary{suffix}.json"), "w") as f:
+    # 先落盘再打印汇总, 防止打印异常丢结果
+    with open(os.path.join(SENSITIVITY_BASE, f"S4_summary{summary_suffix}.json"), "w") as f:
         json.dump(results, f, indent=2)
+    _print_summary("S4 — 噪声水平敏感性", results)
     console.print(f"[bold green]S4 完成![/]")
 
 

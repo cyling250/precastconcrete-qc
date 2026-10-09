@@ -38,6 +38,7 @@ from lib.pointcloud_generator._builder import (    # noqa: E402
     _filter_internal_rebar,
 )
 from lib.pointcloud_generator._config import DENSITY_MAP, NOISE_LEVELS  # noqa: E402
+from lib.utils import anchor_project_path                       # noqa: E402
 from lib.pointcloud_generator._noise import (      # noqa: E402
     apply_density_variation,
     apply_noise,
@@ -113,6 +114,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--quick", action="store_true")
     args = ap.parse_args()
+    args.out = anchor_project_path(args.out)
 
     if args.quick:
         args.types = ["rectangular_column"]

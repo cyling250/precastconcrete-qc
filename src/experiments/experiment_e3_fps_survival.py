@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import torch
 
-from lib.utils import TEST_DIR, console
+from lib.utils import TEST_DIR, console, anchor_project_path
 from lib.utils.datasets import RandomValDataset
 
 CLASS_NAMES = {0: "noise", 1: "concrete", 2: "rebar", 3: "sleeve"}
@@ -131,6 +131,7 @@ def main():
     ap.add_argument("--stride", type=int, default=1,
                     help="patch 等距抽样步长 (val 缓存含数千 patch, 抽样以控制耗时)")
     args = ap.parse_args()
+    args.out = anchor_project_path(args.out)
 
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -31,7 +31,7 @@ from lib.baselines.geometric_seg import (      # noqa: E402
     compute_iou_np,
     segment_geometric,
 )
-from lib.utils import VAL_DIR, TEST_DIR        # noqa: E402
+from lib.utils import VAL_DIR, TEST_DIR, anchor_project_path  # noqa: E402
 
 
 def list_npz(d: str):
@@ -109,6 +109,7 @@ def main():
     ap.add_argument("--radii", type=float, nargs="+", default=[30, 40, 50])
     ap.add_argument("--lins", type=float, nargs="+", default=[0.75, 0.80, 0.85])
     args = ap.parse_args()
+    args.out = anchor_project_path(args.out)
     os.makedirs(args.out, exist_ok=True)
 
     val_files, test_files = list_npz(VAL_DIR), list_npz(TEST_DIR)

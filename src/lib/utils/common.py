@@ -40,6 +40,11 @@ VAL_DIR = os.path.join(MOCK_DIR, "val")
 TEST_DIR = os.path.join(MOCK_DIR, "test")
 
 
+def anchor_project_path(path: str) -> str:
+    """相对路径锚定到项目根 (实验以 cwd=src 运行, 输出路径不能随 cwd 解析)."""
+    return path if os.path.isabs(path) else os.path.join(_PROJECT_ROOT, path)
+
+
 def set_seed(seed: int = 42):
     """全局随机种子 (确保可复现)."""
     random.seed(seed)
